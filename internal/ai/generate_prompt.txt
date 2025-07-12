@@ -1,0 +1,1 @@
+Write a concise, well-structured encyclopedia article on the topic: '%s'. The article should be factual, neutral, and easy to understand. Write the article in the Markdown format. Do not write the topic - start the article immediately. Do not write concluding paragraphs. Use only '#' to write headers.

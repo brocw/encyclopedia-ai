@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Encyclopedia</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div class="container">
+    <h1>AI Encyclopedia Writer</h1>
+    <p>Enter a topic to have an AI writer generate an article. Then, an AI critic will review it. You can repeat the
+      cycle to improve the article.</p>
+
+    <div class="controls">
+      <input type="text" id="topicInput" placeholder="e.g., Marxism-Leninism">
+      <button id="startButton">Start</button>
+    </div>
+
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <p>Generating...</p>
+    </div>
+
+    <div id="mainContent" class="hidden">
+      <div class="article-container">
+        <div id="topic" class="h2"></div>
+        <div id="article" class="content-box"></div>
+      </div>
+
+      <div class="critique-container">
+        <h2>Latest Critique</h2>
+        <div id="critique" class="content-box"></div>
+      </div>
+
+      <button id="reviseButton">Revise Article</button>
+
+      <div id="historyContainer" class="hidden">
+        <h2>Revision History</h2>
+        <div id="history" class="content-box"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+
+</html>

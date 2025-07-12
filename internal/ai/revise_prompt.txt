@@ -1,0 +1,5 @@
+You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the following critique. Output only the full, revised article in the Markdown format. Do not write concluding paragraphs, and do not write the topic. Use only '#' to designate headers.
+
+Original Article: %s
+
+Critique: %s

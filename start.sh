@@ -4,6 +4,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo "Starting Ollama service..."
+# export HSA_OVERRIDE_GTX_VERSION="12.0.1"
+export ROCR_VISIBLE_DEVICES=1
+export HIP_VISIBLE_DEVICES=1
 ollama serve &
 OLLAMA_PID=$!
 
@@ -16,7 +19,7 @@ echo "Ollama is ready."
 
 # Pull models if not already available
 echo "Ensuring required models are available..."
-ollama pull llama2
+ollama pull llama3.1
 ollama pull mistral
 
 echo "Starting Encyclopedia-AI server..."

@@ -62,8 +62,6 @@ button:disabled {
   padding: 15px;
   border-radius: 4px;
   margin-top: 10px;
-  white-space: pre-wrap;
-  /* Preserves formatting like newlines */
   line-height: 1.6;
 }
 

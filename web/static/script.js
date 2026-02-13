@@ -20,6 +20,48 @@ reviseButton.addEventListener('click', handleRevision);
 // --- Functions ---
 
 /**
+ * Reads an SSE stream from a fetch response and dispatches token events.
+ * Returns the final ArticleState from the "done" event.
+ */
+async function streamSSE(response, onArticleToken, onCritiqueToken) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    let result = null;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        // Keep the last potentially incomplete line in the buffer
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7);
+            } else if (line.startsWith('data: ')) {
+                const raw = line.slice(6);
+                if (currentEvent === 'article_token') {
+                    onArticleToken(JSON.parse(raw));
+                } else if (currentEvent === 'critique_token') {
+                    onCritiqueToken(JSON.parse(raw));
+                } else if (currentEvent === 'done') {
+                    result = JSON.parse(JSON.parse(raw));
+                } else if (currentEvent === 'error') {
+                    throw new Error(JSON.parse(raw));
+                }
+                currentEvent = '';
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
  * Handles the initial "Start" button click.
  */
 async function handleStart() {
@@ -30,6 +72,14 @@ async function handleStart() {
     }
 
     setLoading(true);
+    // Show content area early so tokens are visible
+    mainContent.classList.remove('hidden');
+    topicEl.textContent = topic;
+    articleEl.innerHTML = '';
+    critiqueEl.innerHTML = '';
+
+    let articleText = '';
+    let critiqueText = '';
 
     try {
         const response = await fetch('/api/start', {
@@ -42,7 +92,19 @@ async function handleStart() {
             throw new Error(`Server error: ${response.statusText}`);
         }
 
-        articleState = await response.json();
+        articleState = await streamSSE(
+            response,
+            (token) => {
+                articleText += token;
+                articleEl.innerHTML = marked.parse(articleText);
+            },
+            (token) => {
+                critiqueText += token;
+                critiqueEl.innerHTML = marked.parse(critiqueText);
+            },
+        );
+
+        // Final render with complete state
         render();
 
     } catch (error) {
@@ -62,19 +124,36 @@ async function handleRevision() {
     }
 
     setLoading(true);
+    articleEl.innerHTML = '';
+    critiqueEl.innerHTML = '';
+
+    let articleText = '';
+    let critiqueText = '';
 
     try {
         const response = await fetch('/api/continue', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(articleState), // Send the full current state
+            body: JSON.stringify(articleState),
         });
 
         if (!response.ok) {
             throw new Error(`Server error: ${response.statusText}`);
         }
 
-        articleState = await response.json();
+        articleState = await streamSSE(
+            response,
+            (token) => {
+                articleText += token;
+                articleEl.innerHTML = marked.parse(articleText);
+            },
+            (token) => {
+                critiqueText += token;
+                critiqueEl.innerHTML = marked.parse(critiqueText);
+            },
+        );
+
+        // Final render with complete state
         render();
 
     } catch (error) {

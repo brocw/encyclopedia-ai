@@ -3,71 +3,117 @@ package orchestrator
 import (
 	"encyclopedia-ai/internal/ai"
 	"log"
+	"sync"
 )
 
 type ArticleState struct {
 	Topic           string   `json:"topic"`
 	CurrentArticle  string   `json:"current_article"`
-	LastCritique    string   `json:"last_critique"`
+	FactCheck       string   `json:"fact_check"`
+	References      string   `json:"references"`
+	Infobox         string   `json:"infobox"`
+	SeeAlso         string   `json:"see_also"`
 	Categories      string   `json:"categories"`
 	RevisionHistory []string `json:"revision_history"`
 }
 
-func StartNewArticle(topic string) (*ArticleState, error) {
-	// Generate initial article draft
-	initialContent, err := ai.GenerateArticle(topic)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating article '%s'\n", topic)
-
-	// Get first critique of draft
-	critique, err := ai.CritiqueArticle(initialContent)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating first critique of article '%s'\n", topic)
-
-	// Create initial state
-	state := &ArticleState{
-		Topic:           topic,
-		CurrentArticle:  initialContent,
-		LastCritique:    critique,
-		RevisionHistory: []string{}, // No history yet
-	}
-
-	return state, nil
+type PostArticleCallbacks struct {
+	OnFactCheckToken  func(string)
+	OnReferencesToken func(string)
+	OnInfoboxToken    func(string)
+	OnSeeAlsoToken    func(string)
+	OnCategoryToken   func(string)
 }
 
-// StartNewArticleStreaming generates an article, critique, and categories with token callbacks.
-func StartNewArticleStreaming(topic string, onArticleToken, onCritiqueToken, onCategoryToken func(string)) (*ArticleState, error) {
+type agentResult struct {
+	name  string
+	value string
+	err   error
+}
+
+// runPostArticleAgents launches all 5 agents in parallel and collects results.
+func runPostArticleAgents(topic, article string, cb PostArticleCallbacks) (factCheck, references, infobox, seeAlso, categories string, errs []error) {
+	results := make(chan agentResult, 5)
+	var wg sync.WaitGroup
+
+	wg.Add(5)
+
+	go func() {
+		defer wg.Done()
+		val, err := ai.FactCheckStreaming(article, cb.OnFactCheckToken)
+		results <- agentResult{"factcheck", val, err}
+	}()
+
+	go func() {
+		defer wg.Done()
+		val, err := ai.ReferencesStreaming(article, cb.OnReferencesToken)
+		results <- agentResult{"references", val, err}
+	}()
+
+	go func() {
+		defer wg.Done()
+		val, err := ai.InfoboxStreaming(topic, article, cb.OnInfoboxToken)
+		results <- agentResult{"infobox", val, err}
+	}()
+
+	go func() {
+		defer wg.Done()
+		val, err := ai.SeeAlsoStreaming(article, cb.OnSeeAlsoToken)
+		results <- agentResult{"seealso", val, err}
+	}()
+
+	go func() {
+		defer wg.Done()
+		val, err := ai.CategorizeArticleStreaming(article, cb.OnCategoryToken)
+		results <- agentResult{"categories", val, err}
+	}()
+
+	wg.Wait()
+	close(results)
+
+	for r := range results {
+		if r.err != nil {
+			log.Printf("Error from %s agent: %v", r.name, r.err)
+			errs = append(errs, r.err)
+		}
+		switch r.name {
+		case "factcheck":
+			factCheck = r.value
+		case "references":
+			references = r.value
+		case "infobox":
+			infobox = r.value
+		case "seealso":
+			seeAlso = r.value
+		case "categories":
+			categories = r.value
+		}
+	}
+
+	return
+}
+
+// StartNewArticleStreaming generates an article, then runs all 5 post-article agents in parallel.
+func StartNewArticleStreaming(topic string, onArticleToken func(string), cb PostArticleCallbacks) (*ArticleState, error) {
 	initialContent, err := ai.GenerateArticleStreaming(topic, onArticleToken)
 	if err != nil {
 		return nil, err
 	}
-
 	log.Printf("Finished generating article '%s'\n", topic)
 
-	critique, err := ai.CritiqueArticleStreaming(initialContent, onCritiqueToken)
-	if err != nil {
-		return nil, err
+	factCheck, references, infobox, seeAlso, categories, errs := runPostArticleAgents(topic, initialContent, cb)
+	if len(errs) > 0 {
+		log.Printf("Warning: %d post-article agent(s) had errors for '%s'", len(errs), topic)
 	}
-
-	log.Printf("Finished generating first critique of article '%s'\n", topic)
-
-	categories, err := ai.CategorizeArticleStreaming(initialContent, onCategoryToken)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating categories for article '%s'\n", topic)
+	log.Printf("Finished all post-article agents for '%s'\n", topic)
 
 	state := &ArticleState{
 		Topic:           topic,
 		CurrentArticle:  initialContent,
-		LastCritique:    critique,
+		FactCheck:       factCheck,
+		References:      references,
+		Infobox:         infobox,
+		SeeAlso:         seeAlso,
 		Categories:      categories,
 		RevisionHistory: []string{},
 	}
@@ -75,63 +121,29 @@ func StartNewArticleStreaming(topic string, onArticleToken, onCritiqueToken, onC
 	return state, nil
 }
 
-// Takes an existing state and runs a loop
-func PerformRevisionCycle(currentState *ArticleState) (*ArticleState, error) {
-	// Revise article based on last critique
-	revisedContent, err := ai.ReviseArticle(currentState.Topic, currentState.CurrentArticle, currentState.LastCritique)
+// PerformRevisionCycleStreaming revises article using fact-check, then re-runs all agents.
+func PerformRevisionCycleStreaming(currentState *ArticleState, onArticleToken func(string), cb PostArticleCallbacks) (*ArticleState, error) {
+	revisedContent, err := ai.ReviseArticleStreaming(currentState.Topic, currentState.CurrentArticle, currentState.FactCheck, onArticleToken)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Finished revising article '%s'\n", currentState.Topic)
 
-	log.Printf("Finished generating article '%s'\n", currentState.Topic)
-
-	// New critique of the revised article
-	newCritique, err := ai.CritiqueArticle(revisedContent)
-	if err != nil {
-		return nil, err
+	factCheck, references, infobox, seeAlso, categories, errs := runPostArticleAgents(currentState.Topic, revisedContent, cb)
+	if len(errs) > 0 {
+		log.Printf("Warning: %d post-article agent(s) had errors for '%s'", len(errs), currentState.Topic)
 	}
-
-	log.Printf("Finished generating critique of article '%s'\n", currentState.Topic)
+	log.Printf("Finished all post-article agents for revised '%s'\n", currentState.Topic)
 
 	newState := &ArticleState{
 		Topic:           currentState.Topic,
 		CurrentArticle:  revisedContent,
-		LastCritique:    newCritique,
-		RevisionHistory: append(currentState.RevisionHistory, currentState.LastCritique),
-	}
-
-	return newState, nil
-}
-
-// PerformRevisionCycleStreaming revises, critiques, and categorizes with token callbacks.
-func PerformRevisionCycleStreaming(currentState *ArticleState, onArticleToken, onCritiqueToken, onCategoryToken func(string)) (*ArticleState, error) {
-	revisedContent, err := ai.ReviseArticleStreaming(currentState.Topic, currentState.CurrentArticle, currentState.LastCritique, onArticleToken)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating article '%s'\n", currentState.Topic)
-
-	newCritique, err := ai.CritiqueArticleStreaming(revisedContent, onCritiqueToken)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating critique of article '%s'\n", currentState.Topic)
-
-	categories, err := ai.CategorizeArticleStreaming(revisedContent, onCategoryToken)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Finished generating categories for article '%s'\n", currentState.Topic)
-
-	newState := &ArticleState{
-		Topic:           currentState.Topic,
-		CurrentArticle:  revisedContent,
-		LastCritique:    newCritique,
+		FactCheck:       factCheck,
+		References:      references,
+		Infobox:         infobox,
+		SeeAlso:         seeAlso,
 		Categories:      categories,
-		RevisionHistory: append(currentState.RevisionHistory, currentState.LastCritique),
+		RevisionHistory: append(currentState.RevisionHistory, currentState.FactCheck),
 	}
 
 	return newState, nil

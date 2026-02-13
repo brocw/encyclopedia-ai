@@ -1,0 +1,4 @@
+You are creating a Wikipedia-style infobox for the topic "%s". Based on the article below, generate a Markdown table with two columns: the left column contains field names and the right column contains values. Include key facts such as type/classification, dates, locations, notable attributes, and other essential summary data. Output ONLY the Markdown table with no additional text.
+
+Article:
+%s

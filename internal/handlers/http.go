@@ -6,6 +6,7 @@ import (
 	"encyclopedia-ai/internal/orchestrator"
 	"log"
 	"net/http"
+	"sync"
 )
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -14,12 +15,19 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// sendSSE writes a single SSE event to the response and flushes.
-// Data is JSON-encoded to safely handle newlines and special characters.
-func sendSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) {
+// safeSender provides thread-safe SSE writes for concurrent goroutines.
+type safeSender struct {
+	mu      sync.Mutex
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (s *safeSender) send(event, data string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	encoded, _ := json.Marshal(data)
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, encoded)
-	flusher.Flush()
+	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, encoded)
+	s.flusher.Flush()
 }
 
 func StartArticle(w http.ResponseWriter, r *http.Request) {
@@ -47,28 +55,29 @@ func StartArticle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	ss := &safeSender{w: w, flusher: flusher}
+
 	state, err := orchestrator.StartNewArticleStreaming(
 		request.Topic,
-		func(token string) {
-			sendSSE(w, flusher, "article_token", token)
-		},
-		func(token string) {
-			sendSSE(w, flusher, "critique_token", token)
-		},
-		func(token string) {
-			sendSSE(w, flusher, "category_token", token)
+		func(token string) { ss.send("article_token", token) },
+		orchestrator.PostArticleCallbacks{
+			OnFactCheckToken:  func(token string) { ss.send("factcheck_token", token) },
+			OnReferencesToken: func(token string) { ss.send("references_token", token) },
+			OnInfoboxToken:    func(token string) { ss.send("infobox_token", token) },
+			OnSeeAlsoToken:    func(token string) { ss.send("seealso_token", token) },
+			OnCategoryToken:   func(token string) { ss.send("category_token", token) },
 		},
 	)
 	if err != nil {
 		log.Printf("Error in StartArticle: %v", err)
-		sendSSE(w, flusher, "error", err.Error())
+		ss.send("error", err.Error())
 		return
 	}
 
-	sendSSE(w, flusher, "article_done", "")
+	ss.send("article_done", "")
 
 	finalJSON, _ := json.Marshal(state)
-	sendSSE(w, flusher, "done", string(finalJSON))
+	ss.send("done", string(finalJSON))
 }
 
 func ContinueArticle(w http.ResponseWriter, r *http.Request) {
@@ -89,26 +98,27 @@ func ContinueArticle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	ss := &safeSender{w: w, flusher: flusher}
+
 	nextState, err := orchestrator.PerformRevisionCycleStreaming(
 		&currentState,
-		func(token string) {
-			sendSSE(w, flusher, "article_token", token)
-		},
-		func(token string) {
-			sendSSE(w, flusher, "critique_token", token)
-		},
-		func(token string) {
-			sendSSE(w, flusher, "category_token", token)
+		func(token string) { ss.send("article_token", token) },
+		orchestrator.PostArticleCallbacks{
+			OnFactCheckToken:  func(token string) { ss.send("factcheck_token", token) },
+			OnReferencesToken: func(token string) { ss.send("references_token", token) },
+			OnInfoboxToken:    func(token string) { ss.send("infobox_token", token) },
+			OnSeeAlsoToken:    func(token string) { ss.send("seealso_token", token) },
+			OnCategoryToken:   func(token string) { ss.send("category_token", token) },
 		},
 	)
 	if err != nil {
 		log.Printf("Error in ContinueArticle: %v", err)
-		sendSSE(w, flusher, "error", err.Error())
+		ss.send("error", err.Error())
 		return
 	}
 
-	sendSSE(w, flusher, "article_done", "")
+	ss.send("article_done", "")
 
 	finalJSON, _ := json.Marshal(nextState)
-	sendSSE(w, flusher, "done", string(finalJSON))
+	ss.send("done", string(finalJSON))
 }

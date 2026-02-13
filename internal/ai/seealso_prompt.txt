@@ -1,0 +1,4 @@
+Based on the following encyclopedia article, suggest 5 to 10 related topics that a reader might want to explore next. Output ONLY a bulleted Markdown list of topic names. Do not include descriptions or explanations.
+
+Article:
+%s

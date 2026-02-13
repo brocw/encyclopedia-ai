@@ -291,15 +291,46 @@ a:visited {
   color: #3366cc;
 }
 
-/* === Collapsible Critique Panel === */
+/* === Infobox (Wikipedia-style) === */
 
-.wiki-critique-panel {
+.wiki-infobox {
+  float: right;
+  width: 280px;
+  margin: 0 0 16px 20px;
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wiki-infobox table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wiki-infobox th,
+.wiki-infobox td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #eaecf0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.wiki-infobox th {
+  background: #eaecf0;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+/* === Collapsible Panel (fact-check) === */
+
+.wiki-panel {
   margin-top: 30px;
   border: 1px solid #a2a9b1;
   background: #f8f9fa;
 }
 
-.critique-header {
+.panel-header {
   padding: 8px 12px;
   cursor: pointer;
   user-select: none;
@@ -307,7 +338,7 @@ a:visited {
   border-bottom: 1px solid #a2a9b1;
 }
 
-.critique-header h2 {
+.panel-header h2 {
   font-size: 16px;
   font-family: sans-serif;
   font-weight: bold;
@@ -325,11 +356,11 @@ a:visited {
   display: inline-block;
 }
 
-.critique-header.collapsed .collapse-icon {
+.panel-header.collapsed .collapse-icon {
   transform: rotate(-90deg);
 }
 
-.critique-body {
+.panel-body {
   padding: 12px;
   padding-left: 26px;
   max-height: 2000px;
@@ -337,13 +368,41 @@ a:visited {
   transition: max-height 0.3s ease, padding 0.3s ease;
 }
 
-.critique-body.collapsed {
+.panel-body.collapsed {
   max-height: 0;
   padding: 0 12px;
 }
 
-.critique-content {
+.panel-content {
   line-height: 1.6;
+}
+
+/* === Wiki Sections (See Also, References) === */
+
+.wiki-section {
+  margin-top: 24px;
+}
+
+.wiki-section-heading {
+  font-family: "Linux Libertine", Georgia, "Times New Roman", serif;
+  font-weight: normal;
+  font-size: 22px;
+  border-bottom: 1px solid #a2a9b1;
+  padding-bottom: 2px;
+  margin-bottom: 8px;
+}
+
+.wiki-section-body {
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.wiki-section-body ul {
+  margin: 8px 0 8px 24px;
+}
+
+.wiki-section-body ol {
+  margin: 8px 0 8px 24px;
 }
 
 /* === History === */

@@ -1,5 +1,5 @@
-You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the following critique. Output only the full, revised article in the Markdown format. Do not write concluding paragraphs, and do not write the topic. Use only '#' to designate headers. Do not append any critiques to the end of the article.
+You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the following fact-check findings. Address any inaccuracies or unsupported claims that were identified. Output only the full, revised article in the Markdown format. Do not write concluding paragraphs, and do not write the topic. Use only '#' to designate headers. Do not append any fact-check notes to the end of the article.
 
 Original Article: %s
 
-Critique: %s
+Fact-Check Findings: %s

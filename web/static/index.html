@@ -50,7 +50,9 @@
         <h3>Tools</h3>
         <ul>
           <li><button id="reviseButton" class="sidebar-link-button">Revise article</button></li>
-          <li><a href="#critique-section">View critique</a></li>
+          <li><a href="#factcheck-section">View fact-check</a></li>
+          <li><a href="#references-section">References</a></li>
+          <li><a href="#seealso-section">See also</a></li>
           <li><a href="#historyContainer">Revision history</a></li>
         </ul>
       </div>
@@ -65,19 +67,34 @@
       <div id="mainContent" class="hidden">
         <h1 id="topic" class="wiki-article-title"></h1>
 
+        <!-- Infobox (floated right, Wikipedia-style) -->
+        <div id="infobox" class="wiki-infobox hidden"></div>
+
         <div id="article" class="wiki-article-body"></div>
 
-        <!-- Collapsible critique panel -->
-        <div class="wiki-critique-panel" id="critique-section">
-          <div class="critique-header" id="critiqueToggle">
+        <!-- Collapsible fact-check panel -->
+        <div class="wiki-panel" id="factcheck-section">
+          <div class="panel-header" id="factcheckToggle">
             <h2>
               <span class="collapse-icon">&#9660;</span>
-              AI Critique
+              Fact-Check Report
             </h2>
           </div>
-          <div class="critique-body" id="critiqueBody">
-            <div id="critique" class="critique-content"></div>
+          <div class="panel-body" id="factcheckBody">
+            <div id="factcheck" class="panel-content"></div>
           </div>
+        </div>
+
+        <!-- See Also section -->
+        <div id="seealso-section" class="wiki-section hidden">
+          <h2 class="wiki-section-heading">See also</h2>
+          <div id="seeAlso" class="wiki-section-body"></div>
+        </div>
+
+        <!-- References section -->
+        <div id="references-section" class="wiki-section hidden">
+          <h2 class="wiki-section-heading">References</h2>
+          <div id="references" class="wiki-section-body"></div>
         </div>
 
         <!-- Revision history -->

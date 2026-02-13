@@ -1,0 +1,4 @@
+You are a research librarian. Based on the following encyclopedia article, generate a numbered list of plausible academic and authoritative references that would support the claims made. Format each reference in a standard citation style (author, title, publisher/journal, year). Output ONLY the numbered reference list in Markdown format. Do not include any commentary.
+
+Article:
+%s

@@ -11,17 +11,28 @@ import (
 	"net/http"
 )
 
+var apiURL string = "http://localhost:11434/api/generate"
+
 //go:embed generate_prompt.txt
 var generatePrompt string
-
-//go:embed critique_prompt.txt
-var critiquePrompt string
 
 //go:embed revise_prompt.txt
 var revisePrompt string
 
 //go:embed categorize_prompt.txt
 var categorizePrompt string
+
+//go:embed factcheck_prompt.txt
+var factcheckPrompt string
+
+//go:embed references_prompt.txt
+var referencesPrompt string
+
+//go:embed infobox_prompt.txt
+var infoboxPrompt string
+
+//go:embed seealso_prompt.txt
+var seealsoPrompt string
 
 // JSON structure for a request to Ollama API
 type ollamaRequest struct {
@@ -39,7 +50,6 @@ type ollamaResponse struct {
 // Sends prompts to a specific model (non-streaming)
 func callOllama(model, prompt string) (string, error) {
 	log.Printf("[ollama] Starting request to model '%s'...", model)
-	apiURL := "http://localhost:11434/api/generate"
 
 	// Prepare the request data
 	reqData := ollamaRequest{
@@ -84,7 +94,6 @@ func callOllama(model, prompt string) (string, error) {
 // Returns the full concatenated response.
 func CallOllamaStreaming(model, prompt string, onToken func(string)) (string, error) {
 	log.Printf("[ollama-stream] Starting streaming request to model '%s'...", model)
-	apiURL := "http://localhost:11434/api/generate"
 
 	reqData := ollamaRequest{
 		Model:  model,
@@ -132,7 +141,7 @@ func CallOllamaStreaming(model, prompt string, onToken func(string)) (string, er
 	return full, nil
 }
 
-// WriterAI creates first draft
+// GenerateArticle creates first draft (non-streaming)
 func GenerateArticle(topic string) (string, error) {
 	prompt := fmt.Sprintf(generatePrompt, topic)
 	return callOllama("llama3.1", prompt)
@@ -144,32 +153,38 @@ func GenerateArticleStreaming(topic string, onToken func(string)) (string, error
 	return CallOllamaStreaming("llama3.1", prompt, onToken)
 }
 
-// ReaderAI critiques draft
-func CritiqueArticle(article string) (string, error) {
-	prompt := fmt.Sprintf(critiquePrompt, article)
-	return callOllama("mistral", prompt)
-}
-
-// CritiqueArticleStreaming critiques draft with token streaming
-func CritiqueArticleStreaming(article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(critiquePrompt, article)
-	return CallOllamaStreaming("mistral", prompt, onToken)
-}
-
-// WriterAI revises draft
-func ReviseArticle(topic, article, critique string) (string, error) {
-	prompt := fmt.Sprintf(revisePrompt, topic, article, critique)
-	return callOllama("llama3.1", prompt)
-}
-
-// ReviseArticleStreaming revises draft with token streaming
-func ReviseArticleStreaming(topic, article, critique string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(revisePrompt, topic, article, critique)
+// ReviseArticleStreaming revises draft based on fact-check findings
+func ReviseArticleStreaming(topic, article, factcheck string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(revisePrompt, topic, article, factcheck)
 	return CallOllamaStreaming("llama3.1", prompt, onToken)
 }
 
-// CategorizeArticleStreaming generates categories for an article with token streaming
+// CategorizeArticleStreaming generates categories for an article
 func CategorizeArticleStreaming(article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(categorizePrompt, article)
+	return CallOllamaStreaming("mistral", prompt, onToken)
+}
+
+// FactCheckStreaming analyzes article for potential inaccuracies
+func FactCheckStreaming(article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(factcheckPrompt, article)
+	return CallOllamaStreaming("llama3.1", prompt, onToken)
+}
+
+// ReferencesStreaming generates a reference list for the article
+func ReferencesStreaming(article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(referencesPrompt, article)
+	return CallOllamaStreaming("mistral", prompt, onToken)
+}
+
+// InfoboxStreaming generates a Wikipedia-style infobox table
+func InfoboxStreaming(topic, article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(infoboxPrompt, topic, article)
+	return CallOllamaStreaming("mistral", prompt, onToken)
+}
+
+// SeeAlsoStreaming generates related topic suggestions
+func SeeAlsoStreaming(article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(seealsoPrompt, article)
 	return CallOllamaStreaming("mistral", prompt, onToken)
 }

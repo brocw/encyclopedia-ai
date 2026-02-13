@@ -1,0 +1,4 @@
+You are a fact-checker reviewing an encyclopedia article. Analyze the following article and identify any potential inaccuracies, unsupported claims, or misleading statements. Provide 1 to 7 bullet points. For each issue, briefly explain what may be incorrect and suggest what should be verified. Use Markdown format.
+
+Article:
+%s

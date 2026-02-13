@@ -6,7 +6,10 @@ const loadingIndicator = document.getElementById('loading');
 const mainContent = document.getElementById('mainContent');
 const articleEl = document.getElementById('article');
 const topicEl = document.getElementById('topic');
-const critiqueEl = document.getElementById('critique');
+const factcheckEl = document.getElementById('factcheck');
+const infoboxEl = document.getElementById('infobox');
+const seeAlsoEl = document.getElementById('seeAlso');
+const referencesEl = document.getElementById('references');
 const historyContainer = document.getElementById('historyContainer');
 const historyEl = document.getElementById('history');
 const categoriesEl = document.getElementById('articleCategories');
@@ -24,12 +27,21 @@ reviseButton.addEventListener('click', handleRevision);
  * Reads an SSE stream from a fetch response and dispatches token events.
  * Returns the final ArticleState from the "done" event.
  */
-async function streamSSE(response, onArticleToken, onCritiqueToken, onCategoryToken) {
+async function streamSSE(response, callbacks) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let currentEvent = '';
     let result = null;
+
+    const eventMap = {
+        article_token: callbacks.onArticleToken,
+        factcheck_token: callbacks.onFactCheckToken,
+        references_token: callbacks.onReferencesToken,
+        infobox_token: callbacks.onInfoboxToken,
+        seealso_token: callbacks.onSeeAlsoToken,
+        category_token: callbacks.onCategoryToken,
+    };
 
     while (true) {
         const { done, value } = await reader.read();
@@ -45,12 +57,9 @@ async function streamSSE(response, onArticleToken, onCritiqueToken, onCategoryTo
                 currentEvent = line.slice(7);
             } else if (line.startsWith('data: ')) {
                 const raw = line.slice(6);
-                if (currentEvent === 'article_token') {
-                    onArticleToken(JSON.parse(raw));
-                } else if (currentEvent === 'critique_token') {
-                    onCritiqueToken(JSON.parse(raw));
-                } else if (currentEvent === 'category_token') {
-                    onCategoryToken(JSON.parse(raw));
+                const handler = eventMap[currentEvent];
+                if (handler) {
+                    handler(JSON.parse(raw));
                 } else if (currentEvent === 'done') {
                     result = JSON.parse(JSON.parse(raw));
                 } else if (currentEvent === 'error') {
@@ -75,15 +84,15 @@ async function handleStart() {
     }
 
     setLoading(true);
-    // Show content area early so tokens are visible
     mainContent.classList.remove('hidden');
     topicEl.textContent = topic;
-    articleEl.innerHTML = '';
-    critiqueEl.innerHTML = '';
-    categoriesEl.textContent = '';
+    clearContent();
 
     let articleText = '';
-    let critiqueText = '';
+    let factcheckText = '';
+    let referencesText = '';
+    let infoboxText = '';
+    let seeAlsoText = '';
     let categoryText = '';
 
     try {
@@ -97,24 +106,37 @@ async function handleStart() {
             throw new Error(`Server error: ${response.statusText}`);
         }
 
-        articleState = await streamSSE(
-            response,
-            (token) => {
+        articleState = await streamSSE(response, {
+            onArticleToken(token) {
                 articleText += token;
                 articleEl.innerHTML = marked.parse(articleText);
                 debouncedTOCUpdate();
             },
-            (token) => {
-                critiqueText += token;
-                critiqueEl.innerHTML = marked.parse(critiqueText);
+            onFactCheckToken(token) {
+                factcheckText += token;
+                factcheckEl.innerHTML = marked.parse(factcheckText);
             },
-            (token) => {
+            onReferencesToken(token) {
+                referencesText += token;
+                referencesEl.innerHTML = marked.parse(referencesText);
+                document.getElementById('references-section').classList.remove('hidden');
+            },
+            onInfoboxToken(token) {
+                infoboxText += token;
+                infoboxEl.innerHTML = marked.parse(infoboxText);
+                infoboxEl.classList.remove('hidden');
+            },
+            onSeeAlsoToken(token) {
+                seeAlsoText += token;
+                seeAlsoEl.innerHTML = marked.parse(seeAlsoText);
+                document.getElementById('seealso-section').classList.remove('hidden');
+            },
+            onCategoryToken(token) {
                 categoryText += token;
                 categoriesEl.textContent = categoryText;
             },
-        );
+        });
 
-        // Final render with complete state
         render();
 
     } catch (error) {
@@ -134,12 +156,13 @@ async function handleRevision() {
     }
 
     setLoading(true);
-    articleEl.innerHTML = '';
-    critiqueEl.innerHTML = '';
-    categoriesEl.textContent = '';
+    clearContent();
 
     let articleText = '';
-    let critiqueText = '';
+    let factcheckText = '';
+    let referencesText = '';
+    let infoboxText = '';
+    let seeAlsoText = '';
     let categoryText = '';
 
     try {
@@ -153,24 +176,37 @@ async function handleRevision() {
             throw new Error(`Server error: ${response.statusText}`);
         }
 
-        articleState = await streamSSE(
-            response,
-            (token) => {
+        articleState = await streamSSE(response, {
+            onArticleToken(token) {
                 articleText += token;
                 articleEl.innerHTML = marked.parse(articleText);
                 debouncedTOCUpdate();
             },
-            (token) => {
-                critiqueText += token;
-                critiqueEl.innerHTML = marked.parse(critiqueText);
+            onFactCheckToken(token) {
+                factcheckText += token;
+                factcheckEl.innerHTML = marked.parse(factcheckText);
             },
-            (token) => {
+            onReferencesToken(token) {
+                referencesText += token;
+                referencesEl.innerHTML = marked.parse(referencesText);
+                document.getElementById('references-section').classList.remove('hidden');
+            },
+            onInfoboxToken(token) {
+                infoboxText += token;
+                infoboxEl.innerHTML = marked.parse(infoboxText);
+                infoboxEl.classList.remove('hidden');
+            },
+            onSeeAlsoToken(token) {
+                seeAlsoText += token;
+                seeAlsoEl.innerHTML = marked.parse(seeAlsoText);
+                document.getElementById('seealso-section').classList.remove('hidden');
+            },
+            onCategoryToken(token) {
                 categoryText += token;
                 categoriesEl.textContent = categoryText;
             },
-        );
+        });
 
-        // Final render with complete state
         render();
 
     } catch (error) {
@@ -181,30 +217,60 @@ async function handleRevision() {
 }
 
 /**
+ * Clears all content areas for a fresh render.
+ */
+function clearContent() {
+    articleEl.innerHTML = '';
+    factcheckEl.innerHTML = '';
+    infoboxEl.innerHTML = '';
+    infoboxEl.classList.add('hidden');
+    seeAlsoEl.innerHTML = '';
+    document.getElementById('seealso-section').classList.add('hidden');
+    referencesEl.innerHTML = '';
+    document.getElementById('references-section').classList.add('hidden');
+    categoriesEl.textContent = '';
+}
+
+/**
  * Updates the UI based on the current articleState.
  */
 function render() {
     if (!articleState) return;
 
-    // Populate the main content
     topicEl.textContent = articleState.topic;
     articleEl.innerHTML = marked.parse(articleState.current_article);
-    critiqueEl.innerHTML = marked.parse(articleState.last_critique);
 
-    // Update and show revision history if it exists
-    if (articleState.revision_history && articleState.revision_history.length > 0) {
-        historyEl.innerHTML = articleState.revision_history
-            .map((crit, index) => `<h3>Critique from Round ${index + 1}</h3><p>${crit}</p>`)
-            .join('<hr>');
-        historyContainer.classList.remove('hidden');
+    if (articleState.fact_check) {
+        factcheckEl.innerHTML = marked.parse(articleState.fact_check);
     }
 
-    // Render categories
+    if (articleState.infobox) {
+        infoboxEl.innerHTML = marked.parse(articleState.infobox);
+        infoboxEl.classList.remove('hidden');
+    }
+
+    if (articleState.see_also) {
+        seeAlsoEl.innerHTML = marked.parse(articleState.see_also);
+        document.getElementById('seealso-section').classList.remove('hidden');
+    }
+
+    if (articleState.references) {
+        referencesEl.innerHTML = marked.parse(articleState.references);
+        document.getElementById('references-section').classList.remove('hidden');
+    }
+
     if (articleState.categories) {
         categoriesEl.textContent = articleState.categories;
     }
 
-    // Show the main content area
+    // Update and show revision history if it exists
+    if (articleState.revision_history && articleState.revision_history.length > 0) {
+        historyEl.innerHTML = articleState.revision_history
+            .map((fc, index) => `<h3>Fact-Check from Round ${index + 1}</h3>${marked.parse(fc)}`)
+            .join('<hr>');
+        historyContainer.classList.remove('hidden');
+    }
+
     mainContent.classList.remove('hidden');
 
     generateTOC();
@@ -270,12 +336,12 @@ function debouncedTOCUpdate() {
     }, 500);
 }
 
-// --- Critique Toggle ---
+// --- Fact-Check Toggle ---
 
-const critiqueToggle = document.getElementById('critiqueToggle');
-const critiqueBody = document.getElementById('critiqueBody');
+const factcheckToggle = document.getElementById('factcheckToggle');
+const factcheckBody = document.getElementById('factcheckBody');
 
-critiqueToggle.addEventListener('click', () => {
-    critiqueToggle.classList.toggle('collapsed');
-    critiqueBody.classList.toggle('collapsed');
+factcheckToggle.addEventListener('click', () => {
+    factcheckToggle.classList.toggle('collapsed');
+    factcheckBody.classList.toggle('collapsed');
 });

@@ -97,6 +97,7 @@ async function handleStart() {
             (token) => {
                 articleText += token;
                 articleEl.innerHTML = marked.parse(articleText);
+                debouncedTOCUpdate();
             },
             (token) => {
                 critiqueText += token;
@@ -146,6 +147,7 @@ async function handleRevision() {
             (token) => {
                 articleText += token;
                 articleEl.innerHTML = marked.parse(articleText);
+                debouncedTOCUpdate();
             },
             (token) => {
                 critiqueText += token;
@@ -184,6 +186,9 @@ function render() {
 
     // Show the main content area
     mainContent.classList.remove('hidden');
+
+    generateTOC();
+    addEditSectionLinks();
 }
 
 /**
@@ -200,3 +205,57 @@ function setLoading(isLoading) {
         reviseButton.disabled = false;
     }
 }
+
+// --- Table of Contents ---
+
+const tocEl = document.getElementById('tableOfContents');
+
+function generateTOC() {
+    const headings = articleEl.querySelectorAll('h1, h2, h3, h4');
+
+    if (headings.length === 0) {
+        tocEl.innerHTML = '<p class="toc-placeholder">Generate an article to see contents.</p>';
+        return;
+    }
+
+    let html = '<ul>';
+    headings.forEach((heading, index) => {
+        const id = 'section-' + index;
+        heading.id = id;
+        const level = heading.tagName.toLowerCase();
+        html += `<li class="toc-${level}"><a href="#${id}">${heading.textContent}</a></li>`;
+    });
+    html += '</ul>';
+    tocEl.innerHTML = html;
+}
+
+function addEditSectionLinks() {
+    const headings = articleEl.querySelectorAll('h1, h2, h3');
+    headings.forEach((heading) => {
+        if (!heading.querySelector('.edit-section')) {
+            const span = document.createElement('span');
+            span.className = 'edit-section';
+            span.innerHTML = '[<a href="#" onclick="return false;">edit</a>]';
+            heading.appendChild(span);
+        }
+    });
+}
+
+let tocDebounceTimer = null;
+function debouncedTOCUpdate() {
+    clearTimeout(tocDebounceTimer);
+    tocDebounceTimer = setTimeout(() => {
+        generateTOC();
+        addEditSectionLinks();
+    }, 500);
+}
+
+// --- Critique Toggle ---
+
+const critiqueToggle = document.getElementById('critiqueToggle');
+const critiqueBody = document.getElementById('critiqueBody');
+
+critiqueToggle.addEventListener('click', () => {
+    critiqueToggle.classList.toggle('collapsed');
+    critiqueBody.classList.toggle('collapsed');
+});

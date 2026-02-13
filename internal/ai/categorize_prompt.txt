@@ -1,0 +1,3 @@
+Read the following encyclopedia article and generate a comma-separated list of Wikipedia-style categories for it. Output ONLY the category names separated by commas, with no numbering, explanation, or extra formatting.
+
+%s

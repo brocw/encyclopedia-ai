@@ -9,6 +9,7 @@ const topicEl = document.getElementById('topic');
 const critiqueEl = document.getElementById('critique');
 const historyContainer = document.getElementById('historyContainer');
 const historyEl = document.getElementById('history');
+const categoriesEl = document.getElementById('articleCategories');
 
 // State
 let articleState = null;
@@ -23,7 +24,7 @@ reviseButton.addEventListener('click', handleRevision);
  * Reads an SSE stream from a fetch response and dispatches token events.
  * Returns the final ArticleState from the "done" event.
  */
-async function streamSSE(response, onArticleToken, onCritiqueToken) {
+async function streamSSE(response, onArticleToken, onCritiqueToken, onCategoryToken) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -48,6 +49,8 @@ async function streamSSE(response, onArticleToken, onCritiqueToken) {
                     onArticleToken(JSON.parse(raw));
                 } else if (currentEvent === 'critique_token') {
                     onCritiqueToken(JSON.parse(raw));
+                } else if (currentEvent === 'category_token') {
+                    onCategoryToken(JSON.parse(raw));
                 } else if (currentEvent === 'done') {
                     result = JSON.parse(JSON.parse(raw));
                 } else if (currentEvent === 'error') {
@@ -77,9 +80,11 @@ async function handleStart() {
     topicEl.textContent = topic;
     articleEl.innerHTML = '';
     critiqueEl.innerHTML = '';
+    categoriesEl.textContent = '';
 
     let articleText = '';
     let critiqueText = '';
+    let categoryText = '';
 
     try {
         const response = await fetch('/api/start', {
@@ -102,6 +107,10 @@ async function handleStart() {
             (token) => {
                 critiqueText += token;
                 critiqueEl.innerHTML = marked.parse(critiqueText);
+            },
+            (token) => {
+                categoryText += token;
+                categoriesEl.textContent = categoryText;
             },
         );
 
@@ -127,9 +136,11 @@ async function handleRevision() {
     setLoading(true);
     articleEl.innerHTML = '';
     critiqueEl.innerHTML = '';
+    categoriesEl.textContent = '';
 
     let articleText = '';
     let critiqueText = '';
+    let categoryText = '';
 
     try {
         const response = await fetch('/api/continue', {
@@ -152,6 +163,10 @@ async function handleRevision() {
             (token) => {
                 critiqueText += token;
                 critiqueEl.innerHTML = marked.parse(critiqueText);
+            },
+            (token) => {
+                categoryText += token;
+                categoriesEl.textContent = categoryText;
             },
         );
 
@@ -182,6 +197,11 @@ function render() {
             .map((crit, index) => `<h3>Critique from Round ${index + 1}</h3><p>${crit}</p>`)
             .join('<hr>');
         historyContainer.classList.remove('hidden');
+    }
+
+    // Render categories
+    if (articleState.categories) {
+        categoriesEl.textContent = articleState.categories;
     }
 
     // Show the main content area

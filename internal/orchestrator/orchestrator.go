@@ -9,6 +9,7 @@ type ArticleState struct {
 	Topic           string   `json:"topic"`
 	CurrentArticle  string   `json:"current_article"`
 	LastCritique    string   `json:"last_critique"`
+	Categories      string   `json:"categories"`
 	RevisionHistory []string `json:"revision_history"`
 }
 
@@ -40,8 +41,8 @@ func StartNewArticle(topic string) (*ArticleState, error) {
 	return state, nil
 }
 
-// StartNewArticleStreaming generates an article and critique with token callbacks.
-func StartNewArticleStreaming(topic string, onArticleToken, onCritiqueToken func(string)) (*ArticleState, error) {
+// StartNewArticleStreaming generates an article, critique, and categories with token callbacks.
+func StartNewArticleStreaming(topic string, onArticleToken, onCritiqueToken, onCategoryToken func(string)) (*ArticleState, error) {
 	initialContent, err := ai.GenerateArticleStreaming(topic, onArticleToken)
 	if err != nil {
 		return nil, err
@@ -56,10 +57,18 @@ func StartNewArticleStreaming(topic string, onArticleToken, onCritiqueToken func
 
 	log.Printf("Finished generating first critique of article '%s'\n", topic)
 
+	categories, err := ai.CategorizeArticleStreaming(initialContent, onCategoryToken)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Finished generating categories for article '%s'\n", topic)
+
 	state := &ArticleState{
 		Topic:           topic,
 		CurrentArticle:  initialContent,
 		LastCritique:    critique,
+		Categories:      categories,
 		RevisionHistory: []string{},
 	}
 
@@ -94,8 +103,8 @@ func PerformRevisionCycle(currentState *ArticleState) (*ArticleState, error) {
 	return newState, nil
 }
 
-// PerformRevisionCycleStreaming revises and critiques with token callbacks.
-func PerformRevisionCycleStreaming(currentState *ArticleState, onArticleToken, onCritiqueToken func(string)) (*ArticleState, error) {
+// PerformRevisionCycleStreaming revises, critiques, and categorizes with token callbacks.
+func PerformRevisionCycleStreaming(currentState *ArticleState, onArticleToken, onCritiqueToken, onCategoryToken func(string)) (*ArticleState, error) {
 	revisedContent, err := ai.ReviseArticleStreaming(currentState.Topic, currentState.CurrentArticle, currentState.LastCritique, onArticleToken)
 	if err != nil {
 		return nil, err
@@ -110,10 +119,18 @@ func PerformRevisionCycleStreaming(currentState *ArticleState, onArticleToken, o
 
 	log.Printf("Finished generating critique of article '%s'\n", currentState.Topic)
 
+	categories, err := ai.CategorizeArticleStreaming(revisedContent, onCategoryToken)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Finished generating categories for article '%s'\n", currentState.Topic)
+
 	newState := &ArticleState{
 		Topic:           currentState.Topic,
 		CurrentArticle:  revisedContent,
 		LastCritique:    newCritique,
+		Categories:      categories,
 		RevisionHistory: append(currentState.RevisionHistory, currentState.LastCritique),
 	}
 

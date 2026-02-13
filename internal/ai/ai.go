@@ -20,6 +20,9 @@ var critiquePrompt string
 //go:embed revise_prompt.txt
 var revisePrompt string
 
+//go:embed categorize_prompt.txt
+var categorizePrompt string
+
 // JSON structure for a request to Ollama API
 type ollamaRequest struct {
 	Model  string `json:"model"`
@@ -163,4 +166,10 @@ func ReviseArticle(topic, article, critique string) (string, error) {
 func ReviseArticleStreaming(topic, article, critique string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(revisePrompt, topic, article, critique)
 	return CallOllamaStreaming("llama3.1", prompt, onToken)
+}
+
+// CategorizeArticleStreaming generates categories for an article with token streaming
+func CategorizeArticleStreaming(article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(categorizePrompt, article)
+	return CallOllamaStreaming("mistral", prompt, onToken)
 }

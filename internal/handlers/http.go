@@ -55,6 +55,9 @@ func StartArticle(w http.ResponseWriter, r *http.Request) {
 		func(token string) {
 			sendSSE(w, flusher, "critique_token", token)
 		},
+		func(token string) {
+			sendSSE(w, flusher, "category_token", token)
+		},
 	)
 	if err != nil {
 		log.Printf("Error in StartArticle: %v", err)
@@ -93,6 +96,9 @@ func ContinueArticle(w http.ResponseWriter, r *http.Request) {
 		},
 		func(token string) {
 			sendSSE(w, flusher, "critique_token", token)
+		},
+		func(token string) {
+			sendSSE(w, flusher, "category_token", token)
 		},
 	)
 	if err != nil {

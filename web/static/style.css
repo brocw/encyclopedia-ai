@@ -331,6 +331,7 @@ a:visited {
 
 .critique-body {
   padding: 12px;
+  padding-left: 26px;
   max-height: 2000px;
   overflow: hidden;
   transition: max-height 0.3s ease, padding 0.3s ease;

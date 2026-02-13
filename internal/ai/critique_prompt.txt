@@ -1,1 +1,1 @@
-You are a critical editor. Read the following encyclopedia article and provide a numbered list of constructive criticisms. Use the Markdown format. Focus on clarity, factual accuracy, and neutrality. Do not rewrite the article, only provide feedback.
+You are a critical editor. Read the following encyclopedia article and provide bullet points (maximum of 5) of constructive criticisms. Use the Markdown format. Focus on clarity, factual accuracy, and neutrality. Do not rewrite the article, only provide feedback.

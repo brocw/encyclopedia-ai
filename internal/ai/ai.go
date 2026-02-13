@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -32,6 +33,7 @@ type ollamaResponse struct {
 
 // Sends prompts to a specific model
 func callOllama(model, prompt string) (string, error) {
+	log.Printf("[ollama] Starting request to model '%s'...", model)
 	apiURL := "http://localhost:11434/api/generate"
 
 	// Prepare the request data
@@ -63,7 +65,14 @@ func callOllama(model, prompt string) (string, error) {
 		return "", fmt.Errorf("Error unmarshalling ollama response: %w", err)
 	}
 
-	return ollamaResp.Response, nil
+	response := ollamaResp.Response
+	preview := response
+	if len(preview) > 20 {
+		preview = preview[:20]
+	}
+	log.Printf("[ollama] Model '%s' finished. Response length: %d chars. Preview: %q", model, len(response), preview)
+
+	return response, nil
 }
 
 // WriterAI creates first draft

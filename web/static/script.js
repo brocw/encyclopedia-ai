@@ -92,8 +92,8 @@ function render() {
 
     // Populate the main content
     topicEl.textContent = articleState.topic;
-    articleEl.textContent = articleState.current_article;
-    critiqueEl.textContent = articleState.last_critique;
+    articleEl.innerHTML = marked.parse(articleState.current_article);
+    critiqueEl.innerHTML = marked.parse(articleState.last_critique);
 
     // Update and show revision history if it exists
     if (articleState.revision_history && articleState.revision_history.length > 0) {

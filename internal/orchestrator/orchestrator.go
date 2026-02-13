@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encyclopedia-ai/internal/ai"
+	"log"
 )
 
 type ArticleState struct {
@@ -18,11 +19,15 @@ func StartNewArticle(topic string) (*ArticleState, error) {
 		return nil, err
 	}
 
+	log.Printf("Finished generating article '%s'\n", topic)
+
 	// Get first critique of draft
 	critique, err := ai.CritiqueArticle(initialContent)
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("Finished generating first critique of article '%s'\n", topic)
 
 	// Create initial state
 	state := &ArticleState{
@@ -43,11 +48,15 @@ func PerformRevisionCycle(currentState *ArticleState) (*ArticleState, error) {
 		return nil, err
 	}
 
+	log.Printf("Finished generating article '%s'\n", currentState.Topic)
+
 	// New critique of the revised article
 	newCritique, err := ai.CritiqueArticle(revisedContent)
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("Finished generating critique of article '%s'\n", currentState.Topic)
 
 	newState := &ArticleState{
 		Topic:           currentState.Topic,

@@ -1,3 +1,8 @@
-Read the following encyclopedia article and generate a comma-separated list of Wikipedia-style categories for it. Output ONLY the category names separated by commas, with no numbering, explanation, or extra formatting.
+Read the following encyclopedia article and generate Wikipedia-style categories for it.
+
+Respond with ONLY a JSON object in this exact format:
+{"categories": ["Category A", "Category B", "Category C"]}
+
+Do not include any text outside the JSON object.
 
 %s

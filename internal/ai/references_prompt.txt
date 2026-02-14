@@ -1,4 +1,12 @@
-You are a research librarian. Based on the following encyclopedia article, generate a numbered list of plausible academic and authoritative references that would support the claims made. Format each reference in a standard citation style (author, title, publisher/journal, year). Output ONLY the numbered reference list in Markdown format. Do not include any commentary.
+You are a research librarian. Based on the following encyclopedia article, generate a list of plausible academic and authoritative references that would support the claims made.
+
+Respond with ONLY a JSON object in this exact format:
+{"references": [{"author": "Author Name", "title": "Work Title", "publisher": "Publisher or Journal", "year": "Year"}, ...]}
+
+Example:
+{"references": [{"author": "Smith, J.", "title": "A History of Rome", "publisher": "Oxford University Press", "year": "2015"}]}
+
+Do not include any text outside the JSON object.
 
 Article:
 %s

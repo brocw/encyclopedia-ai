@@ -1,4 +1,9 @@
-Based on the following encyclopedia article, suggest 5 to 10 related topics that a reader might want to explore next. Output ONLY a bulleted Markdown list of topic names. Do not include descriptions or explanations.
+Based on the following encyclopedia article, suggest 5 to 10 related topics that a reader might want to explore next.
+
+Respond with ONLY a JSON object in this exact format:
+{"topics": ["Topic A", "Topic B", "Topic C"]}
+
+Do not include descriptions, explanations, or any text outside the JSON object.
 
 Article:
 %s

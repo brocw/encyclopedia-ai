@@ -39,6 +39,7 @@ type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 	Stream bool   `json:"stream"`
+	Format string `json:"format,omitempty"`
 }
 
 // JSON structure for a response from the Ollama API
@@ -141,6 +142,58 @@ func CallOllamaStreaming(model, prompt string, onToken func(string)) (string, er
 	return full, nil
 }
 
+// CallOllamaStreamingJSON is like CallOllamaStreaming but forces JSON output
+// via Ollama's format parameter, which constrains token sampling to valid JSON.
+func CallOllamaStreamingJSON(model, prompt string, onToken func(string)) (string, error) {
+	log.Printf("[ollama-stream-json] Starting JSON streaming request to model '%s'...", model)
+
+	reqData := ollamaRequest{
+		Model:  model,
+		Prompt: prompt,
+		Stream: true,
+		Format: "json",
+	}
+
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling json: %w", err)
+	}
+
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("error sending request to ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var full string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var chunk ollamaResponse
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			continue
+		}
+		if chunk.Response != "" {
+			full += chunk.Response
+			if onToken != nil {
+				onToken(chunk.Response)
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return full, fmt.Errorf("error reading streaming response: %w", err)
+	}
+
+	log.Printf("[ollama-stream-json] Model '%s' finished. Response length: %d chars.", model, len(full))
+	return full, nil
+}
+
 // GenerateArticle creates first draft (non-streaming)
 func GenerateArticle(topic string) (string, error) {
 	prompt := fmt.Sprintf(generatePrompt, topic)
@@ -162,7 +215,7 @@ func ReviseArticleStreaming(topic, article, factcheck string, onToken func(strin
 // CategorizeArticleStreaming generates categories for an article
 func CategorizeArticleStreaming(article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(categorizePrompt, article)
-	return CallOllamaStreaming("mistral", prompt, onToken)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
 }
 
 // FactCheckStreaming analyzes article for potential inaccuracies
@@ -174,17 +227,17 @@ func FactCheckStreaming(article string, onToken func(string)) (string, error) {
 // ReferencesStreaming generates a reference list for the article
 func ReferencesStreaming(article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(referencesPrompt, article)
-	return CallOllamaStreaming("mistral", prompt, onToken)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
 }
 
 // InfoboxStreaming generates a Wikipedia-style infobox table
 func InfoboxStreaming(topic, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(infoboxPrompt, topic, article)
-	return CallOllamaStreaming("mistral", prompt, onToken)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
 }
 
 // SeeAlsoStreaming generates related topic suggestions
 func SeeAlsoStreaming(article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(seealsoPrompt, article)
-	return CallOllamaStreaming("mistral", prompt, onToken)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
 }

@@ -22,6 +22,54 @@ let agentFirstToken = {};
 startButton.addEventListener('click', handleStart);
 reviseButton.addEventListener('click', handleRevision);
 
+// --- JSON Renderers ---
+
+function renderInfoboxJSON(jsonStr) {
+    const data = JSON.parse(jsonStr);
+    let html = '<table>';
+    for (const row of data.rows) {
+        html += `<tr><th>${escapeHTML(row.field)}</th><td>${escapeHTML(row.value)}</td></tr>`;
+    }
+    html += '</table>';
+    return html;
+}
+
+function renderReferencesJSON(jsonStr) {
+    const data = JSON.parse(jsonStr);
+    let html = '<ol>';
+    for (const ref of data.references) {
+        const parts = [];
+        if (ref.author) parts.push(escapeHTML(ref.author));
+        if (ref.title) parts.push(`<i>${escapeHTML(ref.title)}</i>`);
+        if (ref.publisher) parts.push(escapeHTML(ref.publisher));
+        if (ref.year) parts.push(escapeHTML(ref.year));
+        html += `<li>${parts.join('. ')}.</li>`;
+    }
+    html += '</ol>';
+    return html;
+}
+
+function renderSeeAlsoJSON(jsonStr) {
+    const data = JSON.parse(jsonStr);
+    let html = '<ul>';
+    for (const topic of data.topics) {
+        html += `<li>${escapeHTML(topic)}</li>`;
+    }
+    html += '</ul>';
+    return html;
+}
+
+function renderCategoriesJSON(jsonStr) {
+    const data = JSON.parse(jsonStr);
+    return data.categories.map(c => escapeHTML(c)).join(', ');
+}
+
+function escapeHTML(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // --- Functions ---
 
 /**
@@ -127,22 +175,18 @@ async function handleStart() {
             },
             onReferencesToken(token) {
                 referencesText += token;
-                referencesEl.innerHTML = marked.parse(referencesText);
                 document.getElementById('references-section').classList.remove('hidden');
             },
             onInfoboxToken(token) {
                 infoboxText += token;
-                infoboxEl.innerHTML = marked.parse(infoboxText);
                 infoboxEl.classList.remove('hidden');
             },
             onSeeAlsoToken(token) {
                 seeAlsoText += token;
-                seeAlsoEl.innerHTML = marked.parse(seeAlsoText);
                 document.getElementById('seealso-section').classList.remove('hidden');
             },
             onCategoryToken(token) {
                 categoryText += token;
-                categoriesEl.textContent = categoryText;
             },
         });
 
@@ -199,22 +243,18 @@ async function handleRevision() {
             },
             onReferencesToken(token) {
                 referencesText += token;
-                referencesEl.innerHTML = marked.parse(referencesText);
                 document.getElementById('references-section').classList.remove('hidden');
             },
             onInfoboxToken(token) {
                 infoboxText += token;
-                infoboxEl.innerHTML = marked.parse(infoboxText);
                 infoboxEl.classList.remove('hidden');
             },
             onSeeAlsoToken(token) {
                 seeAlsoText += token;
-                seeAlsoEl.innerHTML = marked.parse(seeAlsoText);
                 document.getElementById('seealso-section').classList.remove('hidden');
             },
             onCategoryToken(token) {
                 categoryText += token;
-                categoriesEl.textContent = categoryText;
             },
         });
 
@@ -256,22 +296,38 @@ function render() {
     }
 
     if (articleState.infobox) {
-        infoboxEl.innerHTML = marked.parse(articleState.infobox);
+        try {
+            infoboxEl.innerHTML = renderInfoboxJSON(articleState.infobox);
+        } catch {
+            infoboxEl.innerHTML = marked.parse(articleState.infobox);
+        }
         infoboxEl.classList.remove('hidden');
     }
 
     if (articleState.see_also) {
-        seeAlsoEl.innerHTML = marked.parse(articleState.see_also);
+        try {
+            seeAlsoEl.innerHTML = renderSeeAlsoJSON(articleState.see_also);
+        } catch {
+            seeAlsoEl.innerHTML = marked.parse(articleState.see_also);
+        }
         document.getElementById('seealso-section').classList.remove('hidden');
     }
 
     if (articleState.references) {
-        referencesEl.innerHTML = marked.parse(articleState.references);
+        try {
+            referencesEl.innerHTML = renderReferencesJSON(articleState.references);
+        } catch {
+            referencesEl.innerHTML = marked.parse(articleState.references);
+        }
         document.getElementById('references-section').classList.remove('hidden');
     }
 
     if (articleState.categories) {
-        categoriesEl.textContent = articleState.categories;
+        try {
+            categoriesEl.textContent = renderCategoriesJSON(articleState.categories);
+        } catch {
+            categoriesEl.textContent = articleState.categories;
+        }
     }
 
     // Update and show revision history if it exists

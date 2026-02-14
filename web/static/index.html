@@ -61,7 +61,14 @@
     <!-- Content area -->
     <main class="wiki-content">
       <div id="loading" class="hidden">
-        <div class="spinner"></div>
+        <ul id="agentProgress" class="agent-progress">
+          <li id="agent-article"><span class="agent-status pending"></span> Article generation</li>
+          <li id="agent-factcheck"><span class="agent-status pending"></span> Fact-check</li>
+          <li id="agent-references"><span class="agent-status pending"></span> References</li>
+          <li id="agent-infobox"><span class="agent-status pending"></span> Infobox</li>
+          <li id="agent-seealso"><span class="agent-status pending"></span> See also</li>
+          <li id="agent-categories"><span class="agent-status pending"></span> Categories</li>
+        </ul>
       </div>
 
       <div id="mainContent" class="hidden">

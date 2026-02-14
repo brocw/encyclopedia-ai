@@ -449,26 +449,71 @@ a:visited {
   margin-top: 20px;
 }
 
-/* === Loading Spinner === */
+/* === Agent Progress === */
 
-.spinner {
-  border: 4px solid rgba(0, 0, 0, 0.1);
-  width: 36px;
-  height: 36px;
+.agent-progress {
+  list-style: none;
+  padding: 20px 0;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+}
+
+.agent-progress li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: #54595d;
+}
+
+.agent-status {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  text-align: center;
+  line-height: 16px;
+  flex-shrink: 0;
+}
+
+.agent-status.pending::before {
+  content: "○";
+  color: #a2a9b1;
+  font-size: 14px;
+}
+
+.agent-status.active {
+  border: 2px solid rgba(0, 0, 0, 0.1);
   border-radius: 50%;
   border-left-color: #3366cc;
-  animation: spin 1s ease infinite;
-  margin: 40px auto;
+  animation: spin 1s linear infinite;
+}
+
+.agent-status.active::before {
+  content: "";
+}
+
+.agent-status.done::before {
+  content: "✓";
+  color: #14866d;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.agent-progress li.is-done {
+  color: #202122;
+}
+
+.agent-progress li.is-active {
+  color: #202122;
+  font-weight: 500;
 }
 
 @keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 /* === Utility === */

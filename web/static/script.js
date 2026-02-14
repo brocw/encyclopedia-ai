@@ -16,6 +16,7 @@ const categoriesEl = document.getElementById('articleCategories');
 
 // State
 let articleState = null;
+let agentFirstToken = {};
 
 // --- Event Listeners ---
 startButton.addEventListener('click', handleStart);
@@ -60,8 +61,14 @@ async function streamSSE(response, callbacks) {
                 const handler = eventMap[currentEvent];
                 if (handler) {
                     handler(JSON.parse(raw));
+                } else if (currentEvent === 'article_done') {
+                    setAgentStatus('agent-article', 'done');
+                    ['agent-factcheck', 'agent-references', 'agent-infobox',
+                     'agent-seealso', 'agent-categories'].forEach(id => setAgentStatus(id, 'active'));
                 } else if (currentEvent === 'done') {
                     result = JSON.parse(JSON.parse(raw));
+                    ['agent-article', 'agent-factcheck', 'agent-references',
+                     'agent-infobox', 'agent-seealso', 'agent-categories'].forEach(id => setAgentStatus(id, 'done'));
                 } else if (currentEvent === 'error') {
                     throw new Error(JSON.parse(raw));
                 }
@@ -84,6 +91,8 @@ async function handleStart() {
     }
 
     setLoading(true);
+    resetAgentProgress();
+    setAgentStatus('agent-article', 'active');
     mainContent.classList.remove('hidden');
     topicEl.textContent = topic;
     clearContent();
@@ -156,6 +165,8 @@ async function handleRevision() {
     }
 
     setLoading(true);
+    resetAgentProgress();
+    setAgentStatus('agent-article', 'active');
     clearContent();
 
     let articleText = '';
@@ -275,6 +286,29 @@ function render() {
 
     generateTOC();
     addEditSectionLinks();
+}
+
+/**
+ * Sets the status of an agent progress row.
+ */
+function setAgentStatus(agentId, status) {
+    const li = document.getElementById(agentId);
+    if (!li) return;
+    const span = li.querySelector('.agent-status');
+    span.className = 'agent-status ' + status;
+    li.classList.remove('is-active', 'is-done');
+    if (status === 'active') li.classList.add('is-active');
+    if (status === 'done') li.classList.add('is-done');
+}
+
+/**
+ * Resets all agent progress rows to pending.
+ */
+function resetAgentProgress() {
+    agentFirstToken = {};
+    const agents = ['agent-article', 'agent-factcheck', 'agent-references',
+                     'agent-infobox', 'agent-seealso', 'agent-categories'];
+    agents.forEach(id => setAgentStatus(id, 'pending'));
 }
 
 /**

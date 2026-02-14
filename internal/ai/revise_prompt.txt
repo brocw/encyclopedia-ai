@@ -1,4 +1,14 @@
-You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the following fact-check findings. Address any inaccuracies or unsupported claims that were identified. Output only the full, revised article in the Markdown format. Do not write concluding paragraphs, and do not write the topic. Use only '#' to designate headers. Do not append any fact-check notes to the end of the article.
+You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the fact-check findings below. Address any inaccuracies or unsupported claims.
+
+Requirements:
+- Output ONLY the full revised article in Markdown format.
+- Use ## for section headers (never # or ###).
+- Do NOT start with the topic name as a heading — begin the article body immediately.
+- Do NOT write a concluding paragraph or "Conclusion" section.
+- Do NOT include a "References" or "See Also" section.
+- Do NOT use monospace/code blocks for any content.
+- Do NOT append fact-check notes or revision commentary to the article.
+- Keep paragraphs concise. Use prose, not bullet lists, for the main body.
 
 Original Article: %s
 

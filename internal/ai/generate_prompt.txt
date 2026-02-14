@@ -1,1 +1,10 @@
-Write a concise, well-structured encyclopedia article on the topic: '%s'. The article should be factual, neutral, and easy to understand. Write the article in the Markdown format. Do not write the topic - start the article immediately. Do not write concluding paragraphs. Use only '#' to write headers.
+Write a concise, well-structured encyclopedia article on the topic: '%s'.
+
+Requirements:
+- Factual, neutral tone. Easy to understand.
+- Use Markdown format with ## for section headers (never # or ###).
+- Do NOT start with the topic name as a heading — begin the article body immediately.
+- Do NOT write a concluding paragraph or "Conclusion" section.
+- Do NOT include a "References" or "See Also" section — these are generated separately.
+- Do NOT use monospace/code blocks for any content.
+- Keep paragraphs concise. Use prose, not bullet lists, for the main body.

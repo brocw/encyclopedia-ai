@@ -1,4 +1,4 @@
-You are creating a Wikipedia-style infobox for the topic "%s". Based on the article below, extract key facts such as type/classification, dates, locations, notable attributes, and other essential summary data.
+You are creating a Wikipedia-style infobox for the topic "%s". Based on the article below, extract the most important facts only. Include at most 6 rows covering key details like type/classification, dates, and locations.
 
 Respond with ONLY a JSON object in this exact format:
 {"rows": [{"field": "Field Name", "value": "Field Value"}, ...]}

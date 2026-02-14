@@ -3,6 +3,10 @@ Read the following encyclopedia article and generate Wikipedia-style categories 
 Respond with ONLY a JSON object in this exact format:
 {"categories": ["Category A", "Category B", "Category C"]}
 
-Do not include any text outside the JSON object.
+Rules:
+- Use normal spaced words, not underscores (e.g. "Ancient History" not "Ancient_History").
+- Use title case (e.g. "Organic Chemistry" not "organic chemistry").
+- Generate 3 to 6 categories.
+- Do not include any text outside the JSON object.
 
 %s

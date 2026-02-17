@@ -9,7 +9,6 @@ import (
 func main() {
 	http.Handle("/", http.FileServer(http.Dir("./web/static")))
 	http.HandleFunc("/api/start", handlers.StartArticle)
-	http.HandleFunc("/api/continue", handlers.ContinueArticle)
 
 	log.Println("Server starting on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {

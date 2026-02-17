@@ -1,0 +1,26 @@
+You are a quality evaluator for encyclopedia articles. Score the following article on five dimensions, each from 1 to 10. Then list any critical issues that must be fixed.
+
+Scoring dimensions:
+- factual_accuracy: Are the claims correct and well-supported? Penalize unverifiable or clearly wrong statements.
+- completeness: Does the article cover the topic adequately? Are important subtopics missing?
+- neutrality: Is the tone balanced and encyclopedic? Penalize bias, promotional language, or one-sided framing.
+- clarity: Is the writing clear and easy to follow? Penalize jargon without explanation, awkward phrasing, or disorganized flow.
+- structure: Are sections logical and well-organized? Is the article properly formatted with appropriate headings?
+
+For critical_issues, list only concrete, actionable problems. Each issue should be a single sentence describing what is wrong and what should change. List 0 to 5 issues.
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "scores": {
+    "factual_accuracy": <int 1-10>,
+    "completeness": <int 1-10>,
+    "neutrality": <int 1-10>,
+    "clarity": <int 1-10>,
+    "structure": <int 1-10>
+  },
+  "overall": <float, average of all five scores>,
+  "critical_issues": ["issue 1", "issue 2"]
+}
+
+Article:
+%s

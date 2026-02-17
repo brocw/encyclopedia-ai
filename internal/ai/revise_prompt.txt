@@ -1,4 +1,4 @@
-You are the original author of an encyclopedia article with the topic of '%s'. Revise your article based on the fact-check findings below. Address any inaccuracies or unsupported claims.
+You are the original author of an encyclopedia article with the topic of '%s'. Revise your article by following the revision instructions below exactly.
 
 Requirements:
 - Output ONLY the full revised article in Markdown format.
@@ -7,9 +7,9 @@ Requirements:
 - Do NOT write a concluding paragraph or "Conclusion" section.
 - Do NOT include a "References" or "See Also" section.
 - Do NOT use monospace/code blocks for any content.
-- Do NOT append fact-check notes or revision commentary to the article.
+- Do NOT append revision notes or commentary to the article.
 - Keep paragraphs concise. Use prose, not bullet lists, for the main body.
 
 Original Article: %s
 
-Fact-Check Findings: %s
+Revision Instructions: %s

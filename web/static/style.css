@@ -516,6 +516,158 @@ a:visited {
   100% { transform: rotate(360deg); }
 }
 
+/* === Loop Status / Phase Progress === */
+
+.loop-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+  padding: 20px 0 8px;
+}
+
+.loop-phase {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: #54595d;
+}
+
+.loop-phase.is-active {
+  color: #202122;
+  font-weight: 500;
+}
+
+.loop-phase.is-done {
+  color: #202122;
+}
+
+.round-counter {
+  text-align: center;
+  font-size: 13px;
+  color: #54595d;
+  padding-bottom: 12px;
+}
+
+/* === Rounds Input === */
+
+.rounds-label {
+  font-size: 13px;
+  color: #54595d;
+  padding: 0 4px 0 12px;
+}
+
+.rounds-input {
+  width: 48px;
+  border: none;
+  border-left: 1px solid #a2a9b1;
+  outline: none;
+  padding: 6px 4px;
+  font-size: 14px;
+  text-align: center;
+}
+
+/* === Convergence Badge === */
+
+.convergence-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+
+.convergence-badge.converged {
+  background: #d5fdd5;
+  color: #14866d;
+  border: 1px solid #14866d;
+}
+
+.convergence-badge.not-converged {
+  background: #fef6e7;
+  color: #ac6600;
+  border: 1px solid #ac6600;
+}
+
+/* === Round Timeline === */
+
+.round-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.round-card {
+  flex: 1 1 200px;
+  max-width: 300px;
+  border: 1px solid #c8ccd1;
+  border-radius: 3px;
+  background: #f8f9fa;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.round-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.round-number {
+  font-weight: bold;
+  color: #202122;
+}
+
+.round-overall {
+  font-weight: bold;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.round-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+
+.round-scores span {
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.round-issues {
+  margin-top: 6px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #54595d;
+}
+
+.round-issues li {
+  margin-bottom: 2px;
+}
+
+/* === Score Colors === */
+
+.score-green {
+  background: #d5fdd5;
+  color: #14866d;
+}
+
+.score-yellow {
+  background: #fef6e7;
+  color: #ac6600;
+}
+
+.score-red {
+  background: #fee7e6;
+  color: #d33;
+}
+
 /* === Utility === */
 
 .hidden {

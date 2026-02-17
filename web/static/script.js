@@ -1,26 +1,24 @@
 // DOM Elements
 const topicInput = document.getElementById('topicInput');
+const maxRoundsInput = document.getElementById('maxRoundsInput');
 const startButton = document.getElementById('startButton');
-const reviseButton = document.getElementById('reviseButton');
 const loadingIndicator = document.getElementById('loading');
 const mainContent = document.getElementById('mainContent');
 const articleEl = document.getElementById('article');
 const topicEl = document.getElementById('topic');
-const factcheckEl = document.getElementById('factcheck');
 const infoboxEl = document.getElementById('infobox');
 const seeAlsoEl = document.getElementById('seeAlso');
 const referencesEl = document.getElementById('references');
-const historyContainer = document.getElementById('historyContainer');
-const historyEl = document.getElementById('history');
 const categoriesEl = document.getElementById('articleCategories');
+const roundTimelineEl = document.getElementById('roundTimeline');
+const convergenceBadge = document.getElementById('convergenceBadge');
+const roundCounter = document.getElementById('roundCounter');
 
 // State
 let articleState = null;
-let agentFirstToken = {};
 
 // --- Event Listeners ---
 startButton.addEventListener('click', handleStart);
-reviseButton.addEventListener('click', handleRevision);
 
 // --- JSON Renderers ---
 
@@ -70,6 +68,32 @@ function escapeHTML(str) {
     return div.innerHTML;
 }
 
+// --- Score color helper ---
+
+function scoreColor(score) {
+    if (score >= 8) return 'score-green';
+    if (score >= 5) return 'score-yellow';
+    return 'score-red';
+}
+
+// --- Phase status helper ---
+
+function setPhaseStatus(phaseId, status) {
+    const el = document.getElementById(phaseId);
+    if (!el) return;
+    const span = el.querySelector('.agent-status');
+    span.className = 'agent-status ' + status;
+    el.classList.remove('is-active', 'is-done');
+    if (status === 'active') el.classList.add('is-active');
+    if (status === 'done') el.classList.add('is-done');
+}
+
+function resetPhases() {
+    ['phase-generate', 'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata']
+        .forEach(id => setPhaseStatus(id, 'pending'));
+    roundCounter.textContent = '';
+}
+
 // --- Functions ---
 
 /**
@@ -85,7 +109,8 @@ async function streamSSE(response, callbacks) {
 
     const eventMap = {
         article_token: callbacks.onArticleToken,
-        factcheck_token: callbacks.onFactCheckToken,
+        evaluation_token: callbacks.onEvaluationToken,
+        revision_plan_token: callbacks.onRevisionPlanToken,
         references_token: callbacks.onReferencesToken,
         infobox_token: callbacks.onInfoboxToken,
         seealso_token: callbacks.onSeeAlsoToken,
@@ -98,7 +123,6 @@ async function streamSSE(response, callbacks) {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        // Keep the last potentially incomplete line in the buffer
         buffer = lines.pop();
 
         for (const line of lines) {
@@ -109,14 +133,17 @@ async function streamSSE(response, callbacks) {
                 const handler = eventMap[currentEvent];
                 if (handler) {
                     handler(JSON.parse(raw));
+                } else if (currentEvent === 'round_complete') {
+                    if (callbacks.onRoundComplete) {
+                        callbacks.onRoundComplete(JSON.parse(raw));
+                    }
+                } else if (currentEvent === 'converged') {
+                    if (callbacks.onConverged) callbacks.onConverged();
                 } else if (currentEvent === 'article_done') {
-                    setAgentStatus('agent-article', 'done');
-                    ['agent-factcheck', 'agent-references', 'agent-infobox',
-                     'agent-seealso', 'agent-categories'].forEach(id => setAgentStatus(id, 'active'));
+                    setPhaseStatus('phase-metadata', 'active');
                 } else if (currentEvent === 'done') {
                     result = JSON.parse(JSON.parse(raw));
-                    ['agent-article', 'agent-factcheck', 'agent-references',
-                     'agent-infobox', 'agent-seealso', 'agent-categories'].forEach(id => setAgentStatus(id, 'done'));
+                    setPhaseStatus('phase-metadata', 'done');
                 } else if (currentEvent === 'error') {
                     throw new Error(JSON.parse(raw));
                 }
@@ -129,7 +156,7 @@ async function streamSSE(response, callbacks) {
 }
 
 /**
- * Handles the initial "Start" button click.
+ * Handles the "Generate" button click — triggers the full cybernetic loop.
  */
 async function handleStart() {
     const topic = topicInput.value.trim();
@@ -138,15 +165,18 @@ async function handleStart() {
         return;
     }
 
+    const maxRounds = parseInt(maxRoundsInput.value) || 3;
+
     setLoading(true);
-    resetAgentProgress();
-    setAgentStatus('agent-article', 'active');
+    resetPhases();
+    setPhaseStatus('phase-generate', 'active');
     mainContent.classList.remove('hidden');
     topicEl.textContent = topic;
     clearContent();
 
     let articleText = '';
-    let factcheckText = '';
+    let currentRound = 0;
+    let articleIsRevision = false;
     let referencesText = '';
     let infoboxText = '';
     let seeAlsoText = '';
@@ -156,7 +186,7 @@ async function handleStart() {
         const response = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ topic }),
+            body: JSON.stringify({ topic, max_rounds: maxRounds }),
         });
 
         if (!response.ok) {
@@ -165,13 +195,38 @@ async function handleStart() {
 
         articleState = await streamSSE(response, {
             onArticleToken(token) {
+                // The article_token event fires for both initial generation and revisions.
+                // On the first revision, we need to clear the previous article text.
+                if (articleIsRevision) {
+                    articleText = '';
+                    articleIsRevision = false;
+                    setPhaseStatus('phase-revise', 'active');
+                }
                 articleText += token;
                 articleEl.innerHTML = marked.parse(articleText);
                 debouncedTOCUpdate();
             },
-            onFactCheckToken(token) {
-                factcheckText += token;
-                factcheckEl.innerHTML = marked.parse(factcheckText);
+            onEvaluationToken(token) {
+                setPhaseStatus('phase-generate', 'done');
+                setPhaseStatus('phase-evaluate', 'active');
+            },
+            onRevisionPlanToken(token) {
+                setPhaseStatus('phase-evaluate', 'done');
+                setPhaseStatus('phase-plan', 'active');
+            },
+            onRoundComplete(round) {
+                currentRound = round.number;
+                roundCounter.textContent = `Round ${currentRound} complete (score: ${round.evaluation.overall.toFixed(1)})`;
+                addRoundToTimeline(round);
+
+                // Prepare for next revision
+                setPhaseStatus('phase-plan', 'done');
+                setPhaseStatus('phase-revise', 'pending');
+                articleIsRevision = true;
+            },
+            onConverged() {
+                convergenceBadge.textContent = 'Converged';
+                convergenceBadge.className = 'convergence-badge converged';
             },
             onReferencesToken(token) {
                 referencesText += token;
@@ -193,78 +248,48 @@ async function handleStart() {
         render();
 
     } catch (error) {
-        alert(`Failed to start article: ${error.message}`);
+        alert(`Failed to generate article: ${error.message}`);
     } finally {
         setLoading(false);
     }
 }
 
 /**
- * Handles the "Revise Article" button click.
+ * Adds a completed round to the visual timeline.
  */
-async function handleRevision() {
-    if (!articleState) {
-        alert('No article to revise.');
-        return;
+function addRoundToTimeline(round) {
+    const timelineSection = document.getElementById('round-timeline');
+    timelineSection.classList.remove('hidden');
+
+    const el = document.createElement('div');
+    el.className = 'round-card';
+
+    const scores = round.evaluation.scores;
+    const overall = round.evaluation.overall;
+
+    let issuesHTML = '';
+    if (round.evaluation.critical_issues && round.evaluation.critical_issues.length > 0) {
+        issuesHTML = '<ul class="round-issues">' +
+            round.evaluation.critical_issues.map(i => `<li>${escapeHTML(i)}</li>`).join('') +
+            '</ul>';
     }
 
-    setLoading(true);
-    resetAgentProgress();
-    setAgentStatus('agent-article', 'active');
-    clearContent();
+    el.innerHTML = `
+        <div class="round-header">
+            <span class="round-number">Round ${round.number}</span>
+            <span class="round-overall ${scoreColor(overall)}">${overall.toFixed(1)}</span>
+        </div>
+        <div class="round-scores">
+            <span class="${scoreColor(scores.factual_accuracy)}">Accuracy: ${scores.factual_accuracy}</span>
+            <span class="${scoreColor(scores.completeness)}">Completeness: ${scores.completeness}</span>
+            <span class="${scoreColor(scores.neutrality)}">Neutrality: ${scores.neutrality}</span>
+            <span class="${scoreColor(scores.clarity)}">Clarity: ${scores.clarity}</span>
+            <span class="${scoreColor(scores.structure)}">Structure: ${scores.structure}</span>
+        </div>
+        ${issuesHTML}
+    `;
 
-    let articleText = '';
-    let factcheckText = '';
-    let referencesText = '';
-    let infoboxText = '';
-    let seeAlsoText = '';
-    let categoryText = '';
-
-    try {
-        const response = await fetch('/api/continue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(articleState),
-        });
-
-        if (!response.ok) {
-            throw new Error(`Server error: ${response.statusText}`);
-        }
-
-        articleState = await streamSSE(response, {
-            onArticleToken(token) {
-                articleText += token;
-                articleEl.innerHTML = marked.parse(articleText);
-                debouncedTOCUpdate();
-            },
-            onFactCheckToken(token) {
-                factcheckText += token;
-                factcheckEl.innerHTML = marked.parse(factcheckText);
-            },
-            onReferencesToken(token) {
-                referencesText += token;
-                document.getElementById('references-section').classList.remove('hidden');
-            },
-            onInfoboxToken(token) {
-                infoboxText += token;
-                infoboxEl.classList.remove('hidden');
-            },
-            onSeeAlsoToken(token) {
-                seeAlsoText += token;
-                document.getElementById('seealso-section').classList.remove('hidden');
-            },
-            onCategoryToken(token) {
-                categoryText += token;
-            },
-        });
-
-        render();
-
-    } catch (error) {
-        alert(`Failed to revise article: ${error.message}`);
-    } finally {
-        setLoading(false);
-    }
+    roundTimelineEl.appendChild(el);
 }
 
 /**
@@ -272,7 +297,6 @@ async function handleRevision() {
  */
 function clearContent() {
     articleEl.innerHTML = '';
-    factcheckEl.innerHTML = '';
     infoboxEl.innerHTML = '';
     infoboxEl.classList.add('hidden');
     seeAlsoEl.innerHTML = '';
@@ -280,6 +304,10 @@ function clearContent() {
     referencesEl.innerHTML = '';
     document.getElementById('references-section').classList.add('hidden');
     categoriesEl.textContent = '';
+    roundTimelineEl.innerHTML = '';
+    document.getElementById('round-timeline').classList.add('hidden');
+    convergenceBadge.className = 'convergence-badge hidden';
+    convergenceBadge.textContent = '';
 }
 
 /**
@@ -290,10 +318,6 @@ function render() {
 
     topicEl.textContent = articleState.topic;
     articleEl.innerHTML = marked.parse(articleState.current_article);
-
-    if (articleState.fact_check) {
-        factcheckEl.innerHTML = marked.parse(articleState.fact_check);
-    }
 
     if (articleState.infobox) {
         try {
@@ -330,12 +354,22 @@ function render() {
         }
     }
 
-    // Update and show revision history if it exists
-    if (articleState.revision_history && articleState.revision_history.length > 0) {
-        historyEl.innerHTML = articleState.revision_history
-            .map((fc, index) => `<h3>Fact-Check from Round ${index + 1}</h3>${marked.parse(fc)}`)
-            .join('<hr>');
-        historyContainer.classList.remove('hidden');
+    // Render round timeline from final state
+    if (articleState.rounds && articleState.rounds.length > 0) {
+        roundTimelineEl.innerHTML = '';
+        document.getElementById('round-timeline').classList.remove('hidden');
+        for (const round of articleState.rounds) {
+            addRoundToTimeline(round);
+        }
+    }
+
+    // Update convergence badge
+    if (articleState.converged) {
+        convergenceBadge.textContent = 'Converged';
+        convergenceBadge.className = 'convergence-badge converged';
+    } else if (articleState.rounds && articleState.rounds.length > 0) {
+        convergenceBadge.textContent = 'Max rounds reached';
+        convergenceBadge.className = 'convergence-badge not-converged';
     }
 
     mainContent.classList.remove('hidden');
@@ -345,40 +379,15 @@ function render() {
 }
 
 /**
- * Sets the status of an agent progress row.
- */
-function setAgentStatus(agentId, status) {
-    const li = document.getElementById(agentId);
-    if (!li) return;
-    const span = li.querySelector('.agent-status');
-    span.className = 'agent-status ' + status;
-    li.classList.remove('is-active', 'is-done');
-    if (status === 'active') li.classList.add('is-active');
-    if (status === 'done') li.classList.add('is-done');
-}
-
-/**
- * Resets all agent progress rows to pending.
- */
-function resetAgentProgress() {
-    agentFirstToken = {};
-    const agents = ['agent-article', 'agent-factcheck', 'agent-references',
-                     'agent-infobox', 'agent-seealso', 'agent-categories'];
-    agents.forEach(id => setAgentStatus(id, 'pending'));
-}
-
-/**
  * Manages the visibility of the loading indicator and disables buttons.
  */
 function setLoading(isLoading) {
     if (isLoading) {
         loadingIndicator.classList.remove('hidden');
         startButton.disabled = true;
-        reviseButton.disabled = true;
     } else {
         loadingIndicator.classList.add('hidden');
         startButton.disabled = false;
-        reviseButton.disabled = false;
     }
 }
 
@@ -425,13 +434,3 @@ function debouncedTOCUpdate() {
         addEditSectionLinks();
     }, 500);
 }
-
-// --- Fact-Check Toggle ---
-
-const factcheckToggle = document.getElementById('factcheckToggle');
-const factcheckBody = document.getElementById('factcheckBody');
-
-factcheckToggle.addEventListener('click', () => {
-    factcheckToggle.classList.toggle('collapsed');
-    factcheckBody.classList.toggle('collapsed');
-});

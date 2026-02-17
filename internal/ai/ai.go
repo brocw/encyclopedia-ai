@@ -34,6 +34,12 @@ var infoboxPrompt string
 //go:embed seealso_prompt.txt
 var seealsoPrompt string
 
+//go:embed evaluate_prompt.txt
+var evaluatePrompt string
+
+//go:embed revision_plan_prompt.txt
+var revisionPlanPrompt string
+
 // JSON structure for a request to Ollama API
 type ollamaRequest struct {
 	Model  string `json:"model"`
@@ -239,5 +245,17 @@ func InfoboxStreaming(topic, article string, onToken func(string)) (string, erro
 // SeeAlsoStreaming generates related topic suggestions
 func SeeAlsoStreaming(article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(seealsoPrompt, article)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+}
+
+// EvaluateArticleStreaming scores an article on quality dimensions
+func EvaluateArticleStreaming(article string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(evaluatePrompt, article)
+	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+}
+
+// PlanRevisionStreaming creates targeted revision instructions from an evaluation
+func PlanRevisionStreaming(article, evaluation string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(revisionPlanPrompt, article, evaluation)
 	return CallOllamaStreamingJSON("mistral", prompt, onToken)
 }

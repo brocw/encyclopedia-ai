@@ -23,7 +23,9 @@
     <div class="wiki-header-right">
       <div class="wiki-search">
         <input type="text" id="topicInput" placeholder="Search EncyclopediaAI...">
-        <button id="startButton">Search</button>
+        <label for="maxRoundsInput" class="rounds-label">Rounds:</label>
+        <input type="number" id="maxRoundsInput" min="1" max="10" value="3" class="rounds-input">
+        <button id="startButton">Generate</button>
       </div>
     </div>
   </header>
@@ -49,11 +51,9 @@
       <div class="sidebar-section">
         <h3>Tools</h3>
         <ul>
-          <li><button id="reviseButton" class="sidebar-link-button">Revise article</button></li>
-          <li><a href="#factcheck-section">View fact-check</a></li>
+          <li><a href="#round-timeline">Quality rounds</a></li>
           <li><a href="#references-section">References</a></li>
           <li><a href="#seealso-section">See also</a></li>
-          <li><a href="#historyContainer">Revision history</a></li>
         </ul>
       </div>
     </nav>
@@ -61,35 +61,31 @@
     <!-- Content area -->
     <main class="wiki-content">
       <div id="loading" class="hidden">
-        <ul id="agentProgress" class="agent-progress">
-          <li id="agent-article"><span class="agent-status pending"></span> Article generation</li>
-          <li id="agent-factcheck"><span class="agent-status pending"></span> Fact-check</li>
-          <li id="agent-references"><span class="agent-status pending"></span> References</li>
-          <li id="agent-infobox"><span class="agent-status pending"></span> Infobox</li>
-          <li id="agent-seealso"><span class="agent-status pending"></span> See also</li>
-          <li id="agent-categories"><span class="agent-status pending"></span> Categories</li>
-        </ul>
+        <div id="loopStatus" class="loop-status">
+          <div class="loop-phase" id="phase-generate"><span class="agent-status pending"></span> Generating article</div>
+          <div class="loop-phase" id="phase-evaluate"><span class="agent-status pending"></span> Evaluating quality</div>
+          <div class="loop-phase" id="phase-plan"><span class="agent-status pending"></span> Planning revision</div>
+          <div class="loop-phase" id="phase-revise"><span class="agent-status pending"></span> Revising article</div>
+          <div class="loop-phase" id="phase-metadata"><span class="agent-status pending"></span> Generating metadata</div>
+        </div>
+        <div id="roundCounter" class="round-counter"></div>
       </div>
 
       <div id="mainContent" class="hidden">
         <h1 id="topic" class="wiki-article-title"></h1>
+
+        <!-- Convergence badge -->
+        <div id="convergenceBadge" class="convergence-badge hidden"></div>
 
         <!-- Infobox (floated right, Wikipedia-style) -->
         <div id="infobox" class="wiki-infobox hidden"></div>
 
         <div id="article" class="wiki-article-body"></div>
 
-        <!-- Collapsible fact-check panel -->
-        <div class="wiki-panel" id="factcheck-section">
-          <div class="panel-header" id="factcheckToggle">
-            <h2>
-              <span class="collapse-icon">&#9660;</span>
-              Fact-Check Report
-            </h2>
-          </div>
-          <div class="panel-body" id="factcheckBody">
-            <div id="factcheck" class="panel-content"></div>
-          </div>
+        <!-- Round timeline -->
+        <div id="round-timeline" class="wiki-section hidden">
+          <h2 class="wiki-section-heading">Quality Rounds</h2>
+          <div id="roundTimeline" class="round-timeline"></div>
         </div>
 
         <!-- See Also section -->
@@ -102,12 +98,6 @@
         <div id="references-section" class="wiki-section hidden">
           <h2 class="wiki-section-heading">References</h2>
           <div id="references" class="wiki-section-body"></div>
-        </div>
-
-        <!-- Revision history -->
-        <div id="historyContainer" class="hidden wiki-history-section">
-          <h2>Revision History</h2>
-          <div id="history" class="wiki-history-body"></div>
         </div>
 
         <!-- Category footer -->

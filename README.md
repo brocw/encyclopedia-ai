@@ -1,5 +1,7 @@
 # encyclopedia-ai
 
+![A screenshot of an AI-generated article about Bacon](./screenshot.png)
+
 An encyclopedia, fully-generated and critiqued by LLM agents.
 
 Heavily inspired by Wikipedia, this project intends to create a new type of benchmark for artificial general intelligence. To write is to show understanding - let them write.

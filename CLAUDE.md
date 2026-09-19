@@ -22,7 +22,7 @@ Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests 
 
 ## Tech Stack
 
-- **Backend**: Go 1.24.5 using only the standard library (no external dependencies so far; a short, explicit dependency budget is allowed from M1 — see `docs/DEPLOYMENT.md`)
+- **Backend**: Go 1.25 standard library, plus one dependency: `modernc.org/sqlite`, a pure-Go driver chosen so `CGO_ENABLED=0` and the static single-binary build survive. The dependency budget is deliberately short — see `docs/DEPLOYMENT.md`.
 - **Frontend**: Vanilla HTML/CSS/JS with `marked.js` via CDN for Markdown rendering
 - **LLM**: any `llm.Provider`. Local Ollama (`/api/chat`) by default; OpenRouter or another OpenAI-compatible endpoint with `LLM_PROVIDER=openai`. Reasoning models are supported through `LLM_THINK`.
 
@@ -70,7 +70,7 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 - **Work off the request path**: a request enqueues; a worker generates. Nothing long-running happens inside an HTTP handler, because a reasoning run outlives any reasonable request timeout.
 - **The log is the contract**: clients reconstruct all state by replaying a job's events. Live and resuming subscribers follow the identical path, so there is no separate catch-up code to keep correct.
 - **Token coalescing**: deltas are batched by size or interval before being logged. A run that emitted 11,087 deltas becomes a few dozen events.
-- **In-memory persistence**: `MemoryStore` loses everything on restart. A durable `Store` is the next step; see `docs/DEPLOYMENT.md`.
+- **One store contract, two backends**: `MemoryStore` and `SQLiteStore` are exercised by the same conformance suite in `store_test.go`. Add a backend by adding a case there. `Claim` must stay atomic — it is what stops two workers taking one job.
 
 ### Planned work
 

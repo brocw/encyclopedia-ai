@@ -1,1 +1,6 @@
 gpu-monitor.log
+
+# Local SQLite job store
+*.db
+*.db-wal
+*.db-shm

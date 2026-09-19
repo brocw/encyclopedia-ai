@@ -15,6 +15,32 @@ import (
 	"encyclopedia-ai/internal/jobs"
 )
 
+// openStore builds the job store, returning a function that releases it.
+func openStore(path string) (jobs.Store, func(), error) {
+	if path == "" {
+		log.Printf("Job store: in memory (set ENCYCLOPEDIA_DB to persist)")
+		return jobs.NewMemoryStore(), func() {}, nil
+	}
+
+	store, err := jobs.OpenSQLite(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A job that was running when the process died has no worker any more.
+	recovered, err := store.Recover(context.Background())
+	if err != nil {
+		store.Close()
+		return nil, nil, err
+	}
+	if recovered > 0 {
+		log.Printf("Marked %d job(s) interrupted by the previous shutdown as failed", recovered)
+	}
+
+	log.Printf("Job store: %s", path)
+	return store, func() { store.Close() }, nil
+}
+
 func main() {
 	// Provider configuration is resolved once, so a misconfigured deployment
 	// fails here rather than on a user's first request.
@@ -35,7 +61,15 @@ func main() {
 		workers = parsed
 	}
 
-	store := jobs.NewMemoryStore()
+	// ENCYCLOPEDIA_DB selects a SQLite file. Without it jobs live in memory
+	// and are lost on restart, which is fine for a scratch run but not for
+	// anything deployed.
+	store, closeStore, err := openStore(os.Getenv("ENCYCLOPEDIA_DB"))
+	if err != nil {
+		log.Fatalf("Could not open the job store: %v", err)
+	}
+	defer closeStore()
+
 	runner := jobs.NewRunner(store, agent, jobs.NewBroker(), workers)
 
 	workerCtx, stopWorkers := context.WithCancel(context.Background())

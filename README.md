@@ -13,7 +13,7 @@ never mixed into the article text.
 
 Install:
 
-- Go 1.24 or newer
+- Go 1.25 or newer
 - Ollama
 - `curl`
 - The `llama3.1` and `mistral` Ollama models, or whichever models you configure
@@ -36,6 +36,7 @@ The application listens on `http://localhost:8080` by default. Configuration is 
 | --- | --- | --- |
 | `ENCYCLOPEDIA_ADDR` | `:8080` | HTTP listen address |
 | `JOB_WORKERS` | `1` | Jobs generated at once. Local inference is GPU bound |
+| `ENCYCLOPEDIA_DB` | — | SQLite file for jobs. Unset keeps them in memory |
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
 | `LLM_TEXT_MODEL` | `llama3.1` | Prose generation and revision model |
 | `LLM_STRUCTURED_MODEL` | `mistral` | Evaluation, planning, and metadata model |
@@ -168,6 +169,7 @@ and claim verification.
 
 Generated prose and metadata are not independently verified. In particular, the current references agent produces candidate references rather than retrieved or validated citations. Source retrieval and evidence application are intentionally separate future work.
 
-Jobs live in process memory, so a restart loses them. The store is an
-interface with a durable implementation planned; see `docs/DEPLOYMENT.md`.
+Without `ENCYCLOPEDIA_DB` jobs live in process memory and are lost on restart.
+With it they are kept in SQLite, and a job left running by a crash is marked
+failed at start-up rather than waiting for a worker that no longer exists.
 Browser edits remain local only.

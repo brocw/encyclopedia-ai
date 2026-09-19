@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -316,92 +315,6 @@ func TestBrokerReleaseStopsNotifications(t *testing.T) {
 	broker.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("broker still holds %d subscriber groups", remaining)
-	}
-}
-
-// Two workers must never be handed the same job.
-func TestStoreClaimHandsEachJobToOneWorker(t *testing.T) {
-	store := NewMemoryStore()
-	for i := 0; i < 50; i++ {
-		job, err := NewJob("Topic", 1)
-		if err != nil {
-			t.Fatalf("NewJob returned error: %v", err)
-		}
-		if err := store.Create(context.Background(), job); err != nil {
-			t.Fatalf("Create returned error: %v", err)
-		}
-	}
-
-	var mu sync.Mutex
-	claimed := map[string]int{}
-	var wg sync.WaitGroup
-	for worker := 0; worker < 8; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				job, found, err := store.Claim(context.Background())
-				if err != nil || !found {
-					return
-				}
-				mu.Lock()
-				claimed[job.ID]++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-
-	if len(claimed) != 50 {
-		t.Fatalf("claimed %d distinct jobs, want 50", len(claimed))
-	}
-	for id, times := range claimed {
-		if times != 1 {
-			t.Fatalf("job %s was claimed %d times", id, times)
-		}
-	}
-}
-
-func TestStoreEventsResumeFromASequenceNumber(t *testing.T) {
-	store := NewMemoryStore()
-	job, _ := NewJob("Topic", 1)
-	if err := store.Create(context.Background(), job); err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	for i := 0; i < 5; i++ {
-		if _, err := store.Append(context.Background(), job.ID, []Event{{Type: EventToken}}); err != nil {
-			t.Fatalf("Append returned error: %v", err)
-		}
-	}
-
-	events, err := store.Events(context.Background(), job.ID, 3, 0)
-	if err != nil {
-		t.Fatalf("Events returned error: %v", err)
-	}
-	if len(events) != 2 || events[0].Seq != 4 || events[1].Seq != 5 {
-		t.Fatalf("resumed events = %+v", events)
-	}
-
-	limited, err := store.Events(context.Background(), job.ID, 0, 2)
-	if err != nil {
-		t.Fatalf("Events returned error: %v", err)
-	}
-	if len(limited) != 2 || limited[0].Seq != 1 {
-		t.Fatalf("limited events = %+v", limited)
-	}
-}
-
-func TestStoreReportsUnknownJobs(t *testing.T) {
-	store := NewMemoryStore()
-	if _, err := store.Job(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Job error = %v, want ErrNotFound", err)
-	}
-	if _, err := store.Events(context.Background(), "missing", 0, 0); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Events error = %v, want ErrNotFound", err)
-	}
-	if _, err := store.Append(context.Background(), "missing", []Event{{Type: EventToken}}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Append error = %v, want ErrNotFound", err)
 	}
 }
 

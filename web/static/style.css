@@ -833,3 +833,88 @@ a:visited {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* --- Loop phase detail --- */
+
+.loop-phase-detail {
+  font-style: italic;
+  color: #72777d;
+  font-weight: 400;
+}
+
+/* --- Article plan: the brief and the outline the article was written to --- */
+
+.plan-panel {
+  margin: 0.75rem 0 1.25rem;
+  border: 1px solid #c8ccd1;
+  border-radius: 2px;
+  background: #f8f9fa;
+  font-size: 0.85rem;
+}
+
+.plan-summary {
+  cursor: pointer;
+  padding: 0.45rem 0.7rem;
+  color: #54595d;
+  font-weight: 600;
+  user-select: none;
+}
+
+.plan-summary:hover {
+  color: #202122;
+}
+
+.plan-body {
+  padding: 0.7rem 0.9rem 0.9rem;
+  border-top: 1px solid #c8ccd1;
+  color: #54595d;
+  line-height: 1.6;
+}
+
+.plan-subject {
+  margin: 0 0 0.6rem;
+  color: #202122;
+}
+
+.plan-heading {
+  margin: 0.8rem 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #72777d;
+}
+
+.plan-list,
+.plan-sections {
+  margin: 0;
+  padding-left: 1.3rem;
+}
+
+.plan-sections > li {
+  margin-bottom: 0.5rem;
+}
+
+.plan-sections strong {
+  color: #202122;
+}
+
+.plan-target {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: #72777d;
+}
+
+.plan-purpose {
+  color: #54595d;
+}
+
+/* The questions a section committed to answering. Retrieval will be scored
+   against these, so they are shown rather than hidden. */
+.plan-questions {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  list-style: circle;
+  font-size: 0.8rem;
+  color: #72777d;
+}

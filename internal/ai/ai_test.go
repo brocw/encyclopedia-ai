@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"encyclopedia-ai/internal/llm"
+	"encyclopedia-ai/internal/plan"
 )
 
 // recordingProvider captures the requests each agent builds.
@@ -44,10 +45,13 @@ func TestAgentsUseTheModelRoleForTheirTask(t *testing.T) {
 	client := testClient(provider)
 	ctx := context.Background()
 
-	if _, err := client.GenerateArticle(ctx, "Bacon", nil); err != nil {
-		t.Fatalf("GenerateArticle returned error: %v", err)
+	if _, err := client.DraftLead(ctx, "brief", "outline", nil); err != nil {
+		t.Fatalf("DraftLead returned error: %v", err)
 	}
-	if _, err := client.ReviseArticle(ctx, "Bacon", "draft", "plan", nil); err != nil {
+	if _, err := client.DraftSection(ctx, "brief", "outline", plan.Section{Heading: "Origins"}, "draft", nil); err != nil {
+		t.Fatalf("DraftSection returned error: %v", err)
+	}
+	if _, err := client.ReviseArticle(ctx, "brief", "draft", "plan", nil); err != nil {
 		t.Fatalf("ReviseArticle returned error: %v", err)
 	}
 	for _, request := range provider.requests {
@@ -64,10 +68,16 @@ func TestAgentsUseTheModelRoleForTheirTask(t *testing.T) {
 
 	provider.requests = nil
 	provider.content = `{"topics":[]}`
+	if _, err := client.Intake(ctx, "Bacon", nil); err != nil {
+		t.Fatalf("Intake returned error: %v", err)
+	}
+	if _, err := client.Outline(ctx, "brief", nil); err != nil {
+		t.Fatalf("Outline returned error: %v", err)
+	}
 	if _, err := client.SeeAlso(ctx, "article", nil); err != nil {
 		t.Fatalf("SeeAlso returned error: %v", err)
 	}
-	if _, err := client.EvaluateArticle(ctx, "article", nil); err != nil {
+	if _, err := client.EvaluateArticle(ctx, "brief", "article", nil); err != nil {
 		t.Fatalf("EvaluateArticle returned error: %v", err)
 	}
 	for _, request := range provider.requests {
@@ -82,8 +92,8 @@ func TestAgentsUseTheModelRoleForTheirTask(t *testing.T) {
 
 func TestAgentsCarryTheConfiguredThinkLevel(t *testing.T) {
 	provider := &recordingProvider{content: "prose"}
-	if _, err := testClient(provider).GenerateArticle(context.Background(), "Bacon", nil); err != nil {
-		t.Fatalf("GenerateArticle returned error: %v", err)
+	if _, err := testClient(provider).DraftLead(context.Background(), "brief", "outline", nil); err != nil {
+		t.Fatalf("DraftLead returned error: %v", err)
 	}
 	if provider.requests[0].Think != llm.ThinkHigh {
 		t.Fatalf("think = %q, want the configured level", provider.requests[0].Think)
@@ -98,11 +108,11 @@ func TestReasoningIsExcludedFromTheAnswer(t *testing.T) {
 	}
 
 	var reasoning strings.Builder
-	article, err := testClient(provider).GenerateArticle(context.Background(), "Bacon", func(delta llm.Delta) {
+	article, err := testClient(provider).DraftLead(context.Background(), "brief", "outline", func(delta llm.Delta) {
 		reasoning.WriteString(delta.Reasoning)
 	})
 	if err != nil {
-		t.Fatalf("GenerateArticle returned error: %v", err)
+		t.Fatalf("DraftLead returned error: %v", err)
 	}
 	if article != "Bacon is cured pork." {
 		t.Fatalf("article = %q, want the answer without its reasoning", article)
@@ -116,11 +126,11 @@ func TestPromptsCarryTheAgentArguments(t *testing.T) {
 	provider := &recordingProvider{content: "prose"}
 	client := testClient(provider)
 
-	if _, err := client.ReviseArticle(context.Background(), "Bacon", "the draft", "the plan", nil); err != nil {
+	if _, err := client.ReviseArticle(context.Background(), "the brief", "the draft", "the plan", nil); err != nil {
 		t.Fatalf("ReviseArticle returned error: %v", err)
 	}
 	prompt := provider.requests[0].Messages[1].Content
-	for _, want := range []string{"Bacon", "the draft", "the plan"} {
+	for _, want := range []string{"the brief", "the draft", "the plan"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("revision prompt is missing %q: %s", want, prompt)
 		}
@@ -131,7 +141,7 @@ func TestPromptsCarryTheAgentArguments(t *testing.T) {
 }
 
 func TestClientWithoutAProviderFailsClearly(t *testing.T) {
-	_, err := New(nil, llm.Config{TextModel: "m"}).GenerateArticle(context.Background(), "Bacon", nil)
+	_, err := New(nil, llm.Config{TextModel: "m"}).DraftLead(context.Background(), "brief", "outline", nil)
 	if err == nil || !strings.Contains(err.Error(), "provider is not configured") {
 		t.Fatalf("error = %v", err)
 	}

@@ -1,0 +1,18 @@
+Write the lead of an encyclopedia article: the untitled opening a reader sees before the first heading.
+
+Requirements:
+- Open by naming the subject and saying what it is, in a single sentence.
+- Summarize the whole article, including the sections not yet written. The lead has to stand on its own.
+- Two or three short paragraphs.
+- Neutral and factual. Nothing may fall outside the brief's scope.
+- Do not write a heading of any kind, a bullet list, or a citation marker.
+- Do not address the reader or refer to "this article".
+- Do not use monospace or code blocks.
+
+Output ONLY the lead paragraphs, in Markdown.
+
+Brief:
+%s
+
+Section plan:
+%s

@@ -13,6 +13,8 @@ const (
 	EventReasoning = "reasoning" // a chunk of a stream's reasoning trace
 	EventRestart   = "restart"   // discard this stream; a repair retry is answering again
 	EventPhase     = "phase"     // a pipeline phase started
+	EventBrief     = "brief"     // the intake brief, parsed
+	EventOutline   = "outline"   // the section plan, parsed
 	EventRound     = "round"     // a round completed
 	EventConverged = "converged"
 	EventDone      = "done"

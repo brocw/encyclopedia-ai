@@ -15,19 +15,38 @@ import (
 	"encyclopedia-ai/internal/jobs"
 	"encyclopedia-ai/internal/llm"
 	"encyclopedia-ai/internal/orchestrator"
+	"encyclopedia-ai/internal/plan"
 )
 
 const passingEvaluation = `{"scores":{"factual_accuracy":9,"completeness":9,"neutrality":9,"clarity":9,"structure":9},"overall":9,"critical_issues":[]}`
 
 // testAgent produces an article without a model.
 type testAgent struct {
-	generateErr error
-	release     chan struct{}
+	draftErr error
+	release  chan struct{}
 }
 
-func (a *testAgent) GenerateArticle(ctx context.Context, _ string, sink llm.Sink) (string, error) {
-	if a.generateErr != nil {
-		return "", a.generateErr
+// The fake plans two sections, so the drafted article is a lead plus the two
+// headings the loop writes itself plus the two section bodies.
+const (
+	fakeBrief      = `{"title":"Bacon","subject":"A cured pork product.","kind":"food","scope":["curing","cooking"]}`
+	fakeOutline    = `{"sections":[{"heading":"Alpha","purpose":"a","key_questions":["q"],"target_words":100},{"heading":"Beta","purpose":"b","key_questions":["q"],"target_words":100}]}`
+	draftedArticle = "the article\n\n## Alpha\n\nAlpha body.\n\n## Beta\n\nBeta body."
+)
+
+func (a *testAgent) Intake(_ context.Context, _ string, sink llm.Sink) (string, error) {
+	sink.Emit(llm.Delta{Content: fakeBrief})
+	return fakeBrief, nil
+}
+
+func (a *testAgent) Outline(_ context.Context, _ string, sink llm.Sink) (string, error) {
+	sink.Emit(llm.Delta{Content: fakeOutline})
+	return fakeOutline, nil
+}
+
+func (a *testAgent) DraftLead(ctx context.Context, _, _ string, sink llm.Sink) (string, error) {
+	if a.draftErr != nil {
+		return "", a.draftErr
 	}
 	if a.release != nil {
 		select {
@@ -41,7 +60,13 @@ func (a *testAgent) GenerateArticle(ctx context.Context, _ string, sink llm.Sink
 	return "the article", nil
 }
 
-func (a *testAgent) EvaluateArticle(context.Context, string, llm.Sink) (string, error) {
+func (a *testAgent) DraftSection(_ context.Context, _, _ string, section plan.Section, _ string, sink llm.Sink) (string, error) {
+	body := section.Heading + " body."
+	sink.Emit(llm.Delta{Content: body})
+	return body, nil
+}
+
+func (a *testAgent) EvaluateArticle(context.Context, string, string, llm.Sink) (string, error) {
 	return passingEvaluation, nil
 }
 func (a *testAgent) PlanRevision(context.Context, string, string, llm.Sink) (string, error) {
@@ -196,7 +221,7 @@ func TestCreateArticleReturnsBeforeGenerating(t *testing.T) {
 	if finished.Status != jobs.StatusComplete {
 		t.Fatalf("status = %q, error = %q", finished.Status, finished.Error)
 	}
-	if finished.State == nil || finished.State.CurrentArticle != "the article" {
+	if finished.State == nil || finished.State.CurrentArticle != draftedArticle {
 		t.Fatalf("state = %+v", finished.State)
 	}
 }
@@ -216,7 +241,7 @@ func TestStreamDeliversTheWholeJob(t *testing.T) {
 	}
 
 	events := readSSE(t, response.Body)
-	if rebuilt := rebuild(t, events, jobs.EventToken, jobs.StreamArticle); rebuilt != "the article" {
+	if rebuilt := rebuild(t, events, jobs.EventToken, jobs.StreamArticle); rebuilt != draftedArticle {
 		t.Errorf("article rebuilt from the stream = %q", rebuilt)
 	}
 	// The reasoning trace travels on its own event and never joins the article.
@@ -297,7 +322,7 @@ func TestStreamReplaysAFinishedJob(t *testing.T) {
 	defer response.Body.Close()
 
 	events := readSSE(t, response.Body)
-	if rebuilt := rebuild(t, events, jobs.EventToken, jobs.StreamArticle); rebuilt != "the article" {
+	if rebuilt := rebuild(t, events, jobs.EventToken, jobs.StreamArticle); rebuilt != draftedArticle {
 		t.Fatalf("replayed article = %q", rebuilt)
 	}
 }
@@ -325,7 +350,7 @@ func TestCancelStopsAJob(t *testing.T) {
 }
 
 func TestFailureIsReportedOnTheJobAndTheStream(t *testing.T) {
-	server, _ := newServer(t, &testAgent{generateErr: errors.New("provider unavailable")})
+	server, _ := newServer(t, &testAgent{draftErr: errors.New("provider unavailable")})
 	job := createJob(t, server, `{"topic":"Bacon","max_rounds":1}`)
 
 	finished := awaitTerminal(t, server, job.ID)

@@ -18,6 +18,8 @@ const generationNotice = document.getElementById('generationNotice');
 const reasoningPanel = document.getElementById('reasoningPanel');
 const reasoningPhaseEl = document.getElementById('reasoningPhase');
 const reasoningLog = document.getElementById('reasoningLog');
+const planPanel = document.getElementById('planPanel');
+const planBody = document.getElementById('planBody');
 const editArticleButton = document.getElementById('editArticleButton');
 const articleEditor = document.getElementById('articleEditor');
 const articleTextarea = document.getElementById('articleTextarea');
@@ -26,6 +28,9 @@ const cancelEditButton = document.getElementById('cancelEditButton');
 
 // State
 let articleState = null;
+// The plan the current article is being written to, assembled from the brief
+// and outline events and redrawn as each arrives.
+let articlePlan = { brief: null, outline: null };
 let activeRequestController = null;
 let currentJobId = null;
 
@@ -69,6 +74,53 @@ document.addEventListener('click', (event) => {
 });
 
 // --- JSON Renderers ---
+
+/**
+ * Draws the article plan: the intake brief and the section outline. Every
+ * value here is model output, so all of it is escaped before it reaches the
+ * DOM.
+ */
+function renderPlan() {
+    const { brief, outline } = articlePlan;
+    if (!brief && !outline) {
+        planPanel.classList.add('hidden');
+        planBody.innerHTML = '';
+        return;
+    }
+
+    const parts = [];
+    if (brief) {
+        if (brief.subject) parts.push(`<p class="plan-subject">${escapeHTML(brief.subject)}</p>`);
+        parts.push(planList('Covers', brief.scope));
+        parts.push(planList('Left to other articles', brief.exclusions));
+        parts.push(planList('Other readings of the topic', brief.ambiguities));
+    }
+    if (outline?.sections?.length) {
+        const sections = outline.sections.map(section => `
+            <li>
+                <strong>${escapeHTML(section.heading)}</strong>
+                <span class="plan-target">~${Number(section.target_words) || 0} words</span>
+                ${section.purpose ? `<div class="plan-purpose">${escapeHTML(section.purpose)}</div>` : ''}
+                ${planQuestions(section.key_questions)}
+            </li>`).join('');
+        parts.push(`<h4 class="plan-heading">Sections</h4><ol class="plan-sections">${sections}</ol>`);
+        parts.push(planList('Open questions', outline.open_questions));
+    }
+
+    planBody.innerHTML = parts.filter(Boolean).join('');
+    planPanel.classList.remove('hidden');
+}
+
+function planList(label, items) {
+    if (!items?.length) return '';
+    const entries = items.map(item => `<li>${escapeHTML(item)}</li>`).join('');
+    return `<h4 class="plan-heading">${escapeHTML(label)}</h4><ul class="plan-list">${entries}</ul>`;
+}
+
+function planQuestions(questions) {
+    if (!questions?.length) return '';
+    return `<ul class="plan-questions">${questions.map(q => `<li>${escapeHTML(q)}</li>`).join('')}</ul>`;
+}
 
 function renderInfoboxJSON(jsonStr) {
     const data = JSON.parse(jsonStr);
@@ -174,15 +226,78 @@ function setPhaseStatus(phaseId, status) {
     if (status === 'done') el.classList.add('is-done');
 }
 
+// The pipeline's phases, in the order they are displayed. The server names the
+// phase it has entered, so the client no longer guesses one from whichever
+// stream happens to be producing tokens.
+const PHASE_ROWS = {
+    intake: 'phase-intake',
+    outline: 'phase-outline',
+    lead: 'phase-draft',
+    section: 'phase-draft',
+    evaluate: 'phase-evaluate',
+    plan: 'phase-plan',
+    revise: 'phase-revise',
+    metadata: 'phase-metadata',
+};
+
+const PHASE_IDS = [
+    'phase-intake', 'phase-outline', 'phase-draft',
+    'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata',
+];
+
+let activePhaseRow = null;
+
+function setPhaseDetail(phaseId, text) {
+    const el = document.getElementById(phaseId)?.querySelector('.loop-phase-detail');
+    if (el) el.textContent = text ? ` — ${text}` : '';
+}
+
+/**
+ * Moves the loop status display to the phase the server has entered. The loop
+ * revisits phases, so only the row being left is marked done.
+ */
+function applyPhase(phase) {
+    const row = PHASE_ROWS[phase.name];
+    if (!row) return;
+    if (activePhaseRow && activePhaseRow !== row) {
+        setPhaseStatus(activePhaseRow, 'done');
+        setPhaseDetail(activePhaseRow, '');
+    }
+    activePhaseRow = row;
+    setPhaseStatus(row, 'active');
+    setPhaseDetail(row, describePhase(phase));
+}
+
+function describePhase(phase) {
+    switch (phase.name) {
+        case 'lead':
+            return phase.total ? `lead (1/${phase.total})` : 'lead';
+        case 'section':
+            return phase.total ? `${phase.detail} (${phase.index}/${phase.total})` : phase.detail;
+        case 'evaluate':
+        case 'plan':
+        case 'revise':
+            return phase.index ? `round ${phase.index}` : '';
+        default:
+            return phase.detail || '';
+    }
+}
+
 function resetPhases() {
-    ['phase-generate', 'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata']
-        .forEach(id => setPhaseStatus(id, 'pending'));
+    PHASE_IDS.forEach(id => {
+        setPhaseStatus(id, 'pending');
+        setPhaseDetail(id, '');
+    });
+    activePhaseRow = null;
     roundCounter.textContent = '';
 }
 
 function finishPhaseStatuses(state) {
-    ['phase-generate', 'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata']
-        .forEach(id => setPhaseStatus(id, 'done'));
+    PHASE_IDS.forEach(id => {
+        setPhaseStatus(id, 'done');
+        setPhaseDetail(id, '');
+    });
+    activePhaseRow = null;
 
     if (state.status === 'partial') {
         const warning = state.warnings?.join(' ') || 'The article completed with warnings.';
@@ -304,7 +419,7 @@ async function handleStart() {
     articleState = null;
     setLoading(true);
     resetPhases();
-    setPhaseStatus('phase-generate', 'active');
+    setPhaseStatus('phase-intake', 'active');
     mainContent.classList.remove('hidden');
     topicEl.textContent = topic;
     clearContent();
@@ -342,43 +457,25 @@ async function watchJob(jobId, topic) {
     if (topic) topicEl.textContent = topic;
 
     let articleText = '';
-    let articleIsRevision = false;
 
+    // Only the article stream is painted as it arrives. The brief, the
+    // outline and the metadata documents are JSON, and a half-arrived JSON
+    // object is not something to render; each is drawn from its own event
+    // once the server has parsed it.
     const streamHandlers = {
         article(text) {
-            // Tokens arrive for both the initial draft and each revision. The
-            // first token after a completed round starts a new draft.
-            if (articleIsRevision) {
-                articleText = '';
-                articleIsRevision = false;
-                setPhaseStatus('phase-revise', 'active');
-            }
             articleText += text;
             articleEl.innerHTML = renderMarkdown(articleText);
             debouncedTOCUpdate();
         },
-        evaluation() {
-            setPhaseStatus('phase-generate', 'done');
-            setPhaseStatus('phase-evaluate', 'active');
-        },
-        revision_plan() {
-            setPhaseStatus('phase-evaluate', 'done');
-            setPhaseStatus('phase-plan', 'active');
-        },
         references() {
-            setPhaseStatus('phase-metadata', 'active');
             document.getElementById('references-section').classList.remove('hidden');
         },
         infobox() {
-            setPhaseStatus('phase-metadata', 'active');
             infoboxEl.classList.remove('hidden');
         },
         seealso() {
-            setPhaseStatus('phase-metadata', 'active');
             document.getElementById('seealso-section').classList.remove('hidden');
-        },
-        category() {
-            setPhaseStatus('phase-metadata', 'active');
         },
     };
 
@@ -399,21 +496,40 @@ async function watchJob(jobId, topic) {
                     appendReasoning(data.stream, data.text);
                     break;
                 case 'restart':
-                    // A repair retry answers again from the beginning, so
-                    // whatever this stream has painted is stale.
                     if (data.stream === 'article') {
+                        // The article stream is repainted from the server's
+                        // own copy, so what is on screen is stale and the
+                        // authoritative text follows immediately. This is a
+                        // repair retry or a draft that needed cleaning; the
+                        // reader does not need to be told which.
+                        articleText = '';
+                        articleEl.innerHTML = '';
+                    } else {
+                        showGenerationNotice('The model returned an unusable response; retrying.', 'warning');
+                    }
+                    break;
+                case 'phase':
+                    // A revision rewrites the article whole rather than
+                    // appending to it, so the painted draft is dropped first.
+                    if (data.name === 'revise') {
                         articleText = '';
                         articleEl.innerHTML = '';
                     }
-                    showGenerationNotice('The model returned an unusable response; retrying.', 'warning');
+                    applyPhase(data);
+                    break;
+                case 'brief':
+                    articlePlan.brief = data;
+                    if (data.title) topicEl.textContent = data.title;
+                    renderPlan();
+                    break;
+                case 'outline':
+                    articlePlan.outline = data;
+                    renderPlan();
                     break;
                 case 'round':
                     roundCounter.textContent =
                         `Round ${data.number} complete (score: ${data.evaluation.overall.toFixed(1)})`;
                     addRoundToTimeline(data);
-                    setPhaseStatus('phase-plan', 'done');
-                    setPhaseStatus('phase-revise', 'pending');
-                    articleIsRevision = true;
                     break;
                 case 'converged':
                     convergenceBadge.textContent = 'Converged';
@@ -493,6 +609,8 @@ async function openLinkedJob() {
 }
 
 const REASONING_PHASES = {
+    brief: 'framing the topic',
+    outline: 'planning the sections',
     article: 'drafting',
     evaluation: 'evaluating',
     revision_plan: 'planning the revision',
@@ -588,6 +706,8 @@ function clearContent() {
     generationNotice.className = 'generation-notice hidden';
     generationNotice.textContent = '';
     clearReasoning();
+    articlePlan = { brief: null, outline: null };
+    renderPlan();
     closeArticleEditor();
     categoriesEl.textContent = 'AI Generated Article';
 }
@@ -600,6 +720,10 @@ function render() {
 
     topicEl.textContent = articleState.topic;
     articleEl.innerHTML = renderMarkdown(articleState.current_article);
+
+    if (articleState.brief) articlePlan.brief = articleState.brief;
+    if (articleState.outline) articlePlan.outline = articleState.outline;
+    renderPlan();
 
     if (articleState.infobox) {
         try {

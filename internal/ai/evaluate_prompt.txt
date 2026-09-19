@@ -2,10 +2,10 @@ You are a quality evaluator for encyclopedia articles. Score the following artic
 
 Scoring dimensions:
 - factual_accuracy: Are the claims correct and well-supported? Penalize unverifiable or clearly wrong statements.
-- completeness: Does the article cover the topic adequately? Are important subtopics missing?
+- completeness: Does the article cover everything the brief places in scope, and answer the questions its sections set out to answer? Penalize missing coverage; penalize material the brief places out of scope.
 - neutrality: Is the tone balanced and encyclopedic? Penalize bias, promotional language, or one-sided framing.
 - clarity: Is the writing clear and easy to follow? Penalize jargon without explanation, awkward phrasing, or disorganized flow.
-- structure: Are sections logical and well-organized? Is the article properly formatted with appropriate headings?
+- structure: Are sections logical, well-ordered, and free of overlap? Penalize sections that repeat one another or a lead that fails to summarize the article.
 
 For critical_issues, list only concrete, actionable problems. Each issue should be a single sentence describing what is wrong and what should change. List 0 to 5 issues.
 
@@ -21,6 +21,9 @@ Respond with ONLY valid JSON in this exact format:
   "overall": <float, average of all five scores>,
   "critical_issues": ["issue 1", "issue 2"]
 }
+
+Brief the article was written to:
+%s
 
 Article:
 %s

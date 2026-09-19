@@ -1,0 +1,28 @@
+Plan the sections of an encyclopedia article from the brief below.
+
+Work out the coverage before the structure: what a reader needs to know, the order in which it makes sense, and what a specialist would notice was missing. Then commit to sections.
+
+- Order the sections the way a reference work does: what the subject is, then how it works or what happened, then context, significance, and reception.
+- Give each section a plain noun-phrase heading. No "Introduction", no "Conclusion", and no "Overview" that would restate the lead.
+- State each section's purpose in one sentence, and list the specific questions it must answer. Write questions that a fact can answer, not themes.
+- Set a word target for each section, weighted toward the material that matters most.
+- Sections must not overlap. If two sections would answer the same question, merge them.
+- In open_questions, list anything the article should address that you are not confident about. These are flagged for checking, not for guessing.
+
+Produce 3 to 6 sections. Do not plan a lead section; the lead is written separately.
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "sections": [
+    {
+      "heading": "...",
+      "purpose": "one sentence",
+      "key_questions": ["question", "question"],
+      "target_words": 200
+    }
+  ],
+  "open_questions": ["what you are unsure of"]
+}
+
+Brief:
+%s

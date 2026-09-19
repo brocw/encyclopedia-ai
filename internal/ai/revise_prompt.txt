@@ -1,15 +1,22 @@
-You are the original author of an encyclopedia article with the topic of '%s'. Revise your article by following the revision instructions below exactly.
+Revise the encyclopedia article below by following the revision instructions exactly.
 
 Requirements:
 - Output ONLY the full revised article in Markdown format.
-- Use ## for section headers (never # or ###).
+- Use ## for section headers (never # or ###, except for a subheading that already exists).
 - Do NOT start with the topic name as a heading — begin the article body immediately.
+- Keep the existing section structure unless an instruction says to change it.
+- Stay within the brief. Do not add material the brief places out of scope.
 - Do NOT write a concluding paragraph or "Conclusion" section.
 - Do NOT include a "References" or "See Also" section.
 - Do NOT use monospace/code blocks for any content.
 - Do NOT append revision notes or commentary to the article.
 - Keep paragraphs concise. Use prose, not bullet lists, for the main body.
 
-Original Article: %s
+Brief:
+%s
 
-Revision Instructions: %s
+Original Article:
+%s
+
+Revision Instructions:
+%s

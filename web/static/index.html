@@ -62,11 +62,20 @@
     <main class="wiki-content">
       <div id="loading" class="hidden">
         <div id="loopStatus" class="loop-status">
-          <div class="loop-phase" id="phase-generate"><span class="agent-status pending"></span> Generating article</div>
-          <div class="loop-phase" id="phase-evaluate"><span class="agent-status pending"></span> Evaluating quality</div>
-          <div class="loop-phase" id="phase-plan"><span class="agent-status pending"></span> Planning revision</div>
-          <div class="loop-phase" id="phase-revise"><span class="agent-status pending"></span> Revising article</div>
-          <div class="loop-phase" id="phase-metadata"><span class="agent-status pending"></span> Generating metadata</div>
+          <div class="loop-phase" id="phase-intake"><span class="agent-status pending"></span> Framing the topic<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-outline"><span class="agent-status pending"></span> Planning the sections<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-draft"><span class="agent-status pending"></span> Drafting<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-evaluate"><span class="agent-status pending"></span> Evaluating quality<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-plan"><span class="agent-status pending"></span> Planning revision<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-revise"><span class="agent-status pending"></span> Revising article<em
+              class="loop-phase-detail"></em></div>
+          <div class="loop-phase" id="phase-metadata"><span class="agent-status pending"></span> Generating metadata<em
+              class="loop-phase-detail"></em></div>
         </div>
         <div id="roundCounter" class="round-counter"></div>
 
@@ -89,6 +98,13 @@
         <div id="convergenceBadge" class="convergence-badge hidden"></div>
 
         <div id="generationNotice" class="generation-notice hidden"></div>
+
+        <!-- What the article was planned to be, before any of it was written:
+             the intake brief and the section outline. -->
+        <details id="planPanel" class="plan-panel hidden">
+          <summary class="plan-summary">Article plan</summary>
+          <div id="planBody" class="plan-body"></div>
+        </details>
 
         <div class="article-actions">
           <button id="editArticleButton" class="secondary-button" type="button">Edit article</button>

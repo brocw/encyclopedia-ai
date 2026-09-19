@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"encyclopedia-ai/internal/llm"
+	"encyclopedia-ai/internal/plan"
 )
 
 type fakeAgent struct {
@@ -20,6 +21,10 @@ type fakeAgent struct {
 	planCalls     int
 	reviseCalls   int
 	metadataCalls int
+
+	// briefs records what the judging and rewriting agents were told the
+	// article was supposed to be.
+	briefs []string
 }
 
 func evaluationJSON(scores [5]int) string {
@@ -31,13 +36,34 @@ func evaluationJSON(scores [5]int) string {
 		`},"overall":1,"critical_issues":[]}`
 }
 
-func (f *fakeAgent) GenerateArticle(context.Context, string, llm.Sink) (string, error) {
+// The fake plans two sections, so a drafted article is a lead plus the two
+// headings the loop writes itself plus two bodies.
+const (
+	fakeBrief      = `{"title":"Topic","subject":"A subject.","kind":"concept","scope":["origins","use"]}`
+	fakeOutline    = `{"sections":[{"heading":"Alpha","purpose":"a","key_questions":["q"],"target_words":100},{"heading":"Beta","purpose":"b","key_questions":["q"],"target_words":100}]}`
+	draftedArticle = "initial article\n\n## Alpha\n\nAlpha body.\n\n## Beta\n\nBeta body."
+)
+
+func (f *fakeAgent) Intake(context.Context, string, llm.Sink) (string, error) {
+	return fakeBrief, nil
+}
+
+func (f *fakeAgent) Outline(context.Context, string, llm.Sink) (string, error) {
+	return fakeOutline, nil
+}
+
+func (f *fakeAgent) DraftLead(context.Context, string, string, llm.Sink) (string, error) {
 	return "initial article", nil
 }
 
-func (f *fakeAgent) EvaluateArticle(context.Context, string, llm.Sink) (string, error) {
+func (f *fakeAgent) DraftSection(_ context.Context, _, _ string, section plan.Section, _ string, _ llm.Sink) (string, error) {
+	return section.Heading + " body.", nil
+}
+
+func (f *fakeAgent) EvaluateArticle(_ context.Context, brief, _ string, _ llm.Sink) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.briefs = append(f.briefs, brief)
 	index := f.evaluationAt
 	if index >= len(f.evaluations) {
 		index = len(f.evaluations) - 1
@@ -56,9 +82,10 @@ func (f *fakeAgent) PlanRevision(context.Context, string, string, llm.Sink) (str
 	return `{"instructions":["improve the article"]}`, nil
 }
 
-func (f *fakeAgent) ReviseArticle(context.Context, string, string, string, llm.Sink) (string, error) {
+func (f *fakeAgent) ReviseArticle(_ context.Context, brief, _, _ string, _ llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.reviseCalls++
+	f.briefs = append(f.briefs, brief)
 	f.mu.Unlock()
 	if f.reviseErr != nil {
 		return "", f.reviseErr
@@ -94,7 +121,7 @@ func (f *fakeAgent) CategorizeArticle(context.Context, string, llm.Sink) (string
 	return `{"categories":[]}`, nil
 }
 
-func (f *fakeAgent) counts() (plan, revise, metadata int) {
+func (f *fakeAgent) counts() (planCalls, reviseCalls, metadataCalls int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.planCalls, f.reviseCalls, f.metadataCalls
@@ -133,8 +160,8 @@ func TestRunArticleLoopDoesNotReviseAfterLastRound(t *testing.T) {
 	if state.TerminationReason != TerminationMaxRounds || len(state.Rounds) != 1 {
 		t.Fatalf("unexpected termination state: reason=%q rounds=%d", state.TerminationReason, len(state.Rounds))
 	}
-	if state.CurrentArticle != "initial article" {
-		t.Fatalf("current article = %q, want evaluated initial article", state.CurrentArticle)
+	if state.CurrentArticle != draftedArticle {
+		t.Fatalf("current article = %q, want the drafted article", state.CurrentArticle)
 	}
 }
 
@@ -165,7 +192,7 @@ func TestRunArticleLoopReturnsBestEvaluatedArticleAfterRegression(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunArticleLoop returned error: %v", err)
 	}
-	if state.CurrentArticle != "initial article" {
+	if state.CurrentArticle != draftedArticle {
 		t.Fatalf("current article = %q, want best evaluated article", state.CurrentArticle)
 	}
 }
@@ -188,5 +215,40 @@ func TestRunArticleLoopReturnsPartialStateOnRevisionPlanError(t *testing.T) {
 	_, _, metadataCalls := fake.counts()
 	if metadataCalls != 0 {
 		t.Fatalf("metadata ran after loop failure: %d calls", metadataCalls)
+	}
+}
+
+// The brief is the article's specification: the agents that judge and rewrite
+// the article are shown it, so "complete" and "off-topic" mean something.
+func TestRunArticleLoopCarriesThePlanThroughTheLoop(t *testing.T) {
+	fake := &fakeAgent{evaluations: []string{
+		evaluationJSON([5]int{7, 7, 7, 7, 7}),
+		evaluationJSON([5]int{9, 9, 9, 9, 9}),
+	}}
+	state, err := RunArticleLoop(context.Background(), "topic", 2, fake, LoopCallbacks{})
+	if err != nil {
+		t.Fatalf("RunArticleLoop returned error: %v", err)
+	}
+
+	if state.Brief == nil || state.Outline == nil {
+		t.Fatal("the finished state does not carry the plan the article was written to")
+	}
+	if state.Topic != "Topic" {
+		t.Errorf("topic = %q, want the title the brief settled on", state.Topic)
+	}
+	if len(state.Outline.Sections) != 2 {
+		t.Errorf("outline sections = %d, want 2", len(state.Outline.Sections))
+	}
+
+	fake.mu.Lock()
+	briefs := fake.briefs
+	fake.mu.Unlock()
+	if len(briefs) < 3 {
+		t.Fatalf("briefs passed = %d, want one per evaluation and revision", len(briefs))
+	}
+	for _, brief := range briefs {
+		if !strings.Contains(brief, "A subject.") {
+			t.Fatalf("an agent was given %q instead of the brief", brief)
+		}
 	}
 }

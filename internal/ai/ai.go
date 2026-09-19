@@ -10,10 +10,20 @@ import (
 	"fmt"
 
 	"encyclopedia-ai/internal/llm"
+	"encyclopedia-ai/internal/plan"
 )
 
-//go:embed generate_prompt.txt
-var generatePrompt string
+//go:embed intake_prompt.txt
+var intakePrompt string
+
+//go:embed outline_prompt.txt
+var outlinePrompt string
+
+//go:embed lead_prompt.txt
+var leadPrompt string
+
+//go:embed section_prompt.txt
+var sectionPrompt string
 
 //go:embed revise_prompt.txt
 var revisePrompt string
@@ -117,12 +127,32 @@ func (c *Client) call(ctx context.Context, req llm.Request, sink llm.Sink) (stri
 	return response.Content, err
 }
 
-func (c *Client) GenerateArticle(ctx context.Context, topic string, sink llm.Sink) (string, error) {
-	return c.prose(ctx, fmt.Sprintf(generatePrompt, topic), sink)
+// Intake turns a reader's topic into a brief: a title, a subject sentence, and
+// the boundary of the article. Nothing is written until this has run.
+func (c *Client) Intake(ctx context.Context, topic string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(intakePrompt, topic), sink)
 }
 
-func (c *Client) ReviseArticle(ctx context.Context, topic, article, revisionPlan string, sink llm.Sink) (string, error) {
-	return c.prose(ctx, fmt.Sprintf(revisePrompt, topic, article, revisionPlan), sink)
+// Outline plans the article's sections from the brief.
+func (c *Client) Outline(ctx context.Context, brief string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(outlinePrompt, brief), sink)
+}
+
+// DraftLead writes the untitled opening. It is written first even though it
+// summarizes sections that do not exist yet, because the outline already says
+// what they will contain.
+func (c *Client) DraftLead(ctx context.Context, brief, outline string, sink llm.Sink) (string, error) {
+	return c.prose(ctx, fmt.Sprintf(leadPrompt, brief, outline), sink)
+}
+
+// DraftSection writes one section against its assignment. draft is the article
+// so far, which is what keeps sections from repeating one another.
+func (c *Client) DraftSection(ctx context.Context, brief, outline string, section plan.Section, draft string, sink llm.Sink) (string, error) {
+	return c.prose(ctx, fmt.Sprintf(sectionPrompt, brief, outline, section.Prompt(), draft), sink)
+}
+
+func (c *Client) ReviseArticle(ctx context.Context, brief, article, revisionPlan string, sink llm.Sink) (string, error) {
+	return c.prose(ctx, fmt.Sprintf(revisePrompt, brief, article, revisionPlan), sink)
 }
 
 func (c *Client) CategorizeArticle(ctx context.Context, article string, sink llm.Sink) (string, error) {
@@ -141,8 +171,8 @@ func (c *Client) SeeAlso(ctx context.Context, article string, sink llm.Sink) (st
 	return c.structured(ctx, fmt.Sprintf(seealsoPrompt, article), sink)
 }
 
-func (c *Client) EvaluateArticle(ctx context.Context, article string, sink llm.Sink) (string, error) {
-	return c.structured(ctx, fmt.Sprintf(evaluatePrompt, article), sink)
+func (c *Client) EvaluateArticle(ctx context.Context, brief, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(evaluatePrompt, brief, article), sink)
 }
 
 func (c *Client) PlanRevision(ctx context.Context, article, evaluation string, sink llm.Sink) (string, error) {

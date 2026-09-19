@@ -1,0 +1,22 @@
+A reader has asked for an encyclopedia article on: '%s'
+
+Before anything is written, decide what that article is about.
+
+- Give the article its encyclopedic title. Fix spelling and capitalization, and expand an abbreviation when the expansion is the conventional title.
+- Say in one sentence what the subject is, the way a lead sentence would.
+- Name the kind of subject in a word or two (person, place, organism, event, concept, technology, work, organization, and so on).
+- List what a reference article on this subject must cover. These are areas of coverage, not section headings.
+- If the same words could reasonably name something else, list the readings you set aside.
+- List anything a reader might expect to find here that properly belongs in a different article.
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "title": "...",
+  "subject": "one sentence",
+  "kind": "...",
+  "scope": ["area of coverage", "area of coverage"],
+  "exclusions": ["what belongs in another article"],
+  "ambiguities": ["reading of the topic that was not chosen"]
+}
+
+Give 3 to 8 scope entries. Use an empty array for any field that does not apply.

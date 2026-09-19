@@ -10,19 +10,38 @@ import (
 
 	"encyclopedia-ai/internal/llm"
 	"encyclopedia-ai/internal/orchestrator"
+	"encyclopedia-ai/internal/plan"
 )
 
 // fakeAgent produces a deterministic article without a model.
 type fakeAgent struct {
-	generateErr error
-	block       chan struct{} // when set, GenerateArticle waits on it or the context
+	draftErr error
+	block    chan struct{} // when set, DraftLead waits on it or the context
 }
 
 const passingEvaluation = `{"scores":{"factual_accuracy":9,"completeness":9,"neutrality":9,"clarity":9,"structure":9},"overall":9,"critical_issues":[]}`
 
-func (a *fakeAgent) GenerateArticle(ctx context.Context, _ string, sink llm.Sink) (string, error) {
-	if a.generateErr != nil {
-		return "", a.generateErr
+// The fake plans two sections, so the drafted article is a lead plus the two
+// headings the loop writes itself plus the two section bodies.
+const (
+	fakeBrief      = `{"title":"Bacon","subject":"A cured pork product.","kind":"food","scope":["curing","cooking"]}`
+	fakeOutline    = `{"sections":[{"heading":"Alpha","purpose":"a","key_questions":["q"],"target_words":100},{"heading":"Beta","purpose":"b","key_questions":["q"],"target_words":100}]}`
+	draftedArticle = "the article\n\n## Alpha\n\nAlpha body.\n\n## Beta\n\nBeta body."
+)
+
+func (a *fakeAgent) Intake(_ context.Context, _ string, sink llm.Sink) (string, error) {
+	sink.Emit(llm.Delta{Content: fakeBrief})
+	return fakeBrief, nil
+}
+
+func (a *fakeAgent) Outline(_ context.Context, _ string, sink llm.Sink) (string, error) {
+	sink.Emit(llm.Delta{Content: fakeOutline})
+	return fakeOutline, nil
+}
+
+func (a *fakeAgent) DraftLead(ctx context.Context, _, _ string, sink llm.Sink) (string, error) {
+	if a.draftErr != nil {
+		return "", a.draftErr
 	}
 	if a.block != nil {
 		select {
@@ -36,7 +55,13 @@ func (a *fakeAgent) GenerateArticle(ctx context.Context, _ string, sink llm.Sink
 	return "the article", nil
 }
 
-func (a *fakeAgent) EvaluateArticle(_ context.Context, _ string, sink llm.Sink) (string, error) {
+func (a *fakeAgent) DraftSection(_ context.Context, _, _ string, section plan.Section, _ string, sink llm.Sink) (string, error) {
+	body := section.Heading + " body."
+	sink.Emit(llm.Delta{Content: body})
+	return body, nil
+}
+
+func (a *fakeAgent) EvaluateArticle(_ context.Context, _, _ string, sink llm.Sink) (string, error) {
 	sink.Emit(llm.Delta{Content: passingEvaluation})
 	return passingEvaluation, nil
 }
@@ -115,7 +140,7 @@ func TestRunnerCompletesAJobAndLogsItsEvents(t *testing.T) {
 	if finished.Status != StatusComplete {
 		t.Fatalf("status = %q, error = %q", finished.Status, finished.Error)
 	}
-	if finished.State == nil || finished.State.CurrentArticle != "the article" {
+	if finished.State == nil || finished.State.CurrentArticle != draftedArticle {
 		t.Fatalf("state = %+v", finished.State)
 	}
 	if finished.StartedAt == nil || finished.FinishedAt == nil {
@@ -154,7 +179,7 @@ func TestRunnerCompletesAJobAndLogsItsEvents(t *testing.T) {
 	if byType[EventDone] != 1 || byType[EventRound] != 1 {
 		t.Fatalf("event types = %v", byType)
 	}
-	if answer != "the article" {
+	if answer != draftedArticle {
 		t.Errorf("article rebuilt from the log = %q", answer)
 	}
 	if reasoning != "deciding the scope" {
@@ -176,7 +201,7 @@ func TestRunnerCompletesAJobAndLogsItsEvents(t *testing.T) {
 }
 
 func TestRunnerRecordsAFailure(t *testing.T) {
-	runner, store := startRunner(t, &fakeAgent{generateErr: errors.New("provider unavailable")})
+	runner, store := startRunner(t, &fakeAgent{draftErr: errors.New("provider unavailable")})
 
 	job, err := runner.Enqueue(context.Background(), "Bacon", 1)
 	if err != nil {

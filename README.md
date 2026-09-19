@@ -2,7 +2,12 @@
 
 ![A screenshot of an AI-generated article about Bacon](./screenshot.png)
 
-An experimental encyclopedia generator that uses AI agents to draft, evaluate, revise, and enhance Wikipedia-style articles.
+An experimental encyclopedia generator that uses AI agents to plan, draft, evaluate, revise, and enhance Wikipedia-style articles.
+
+Nothing is written one-shot. A topic is first turned into a *brief* that fixes
+what the article is about, then into an *outline* of sections with the
+questions each one has to answer; only then is prose written, one section at a
+time, against that plan.
 
 Model calls go through a provider boundary, so the same pipeline runs against a
 local Ollama instance or any OpenAI-compatible API such as OpenRouter. Reasoning
@@ -93,6 +98,22 @@ without one, so `llama3.1` and `mistral` keep working with `LLM_THINK` set.
 
 ## Generation flow
 
+```
+Intake → Outline → Lead → Section* → [Evaluate → Compare → Plan → Revise]* → Metadata
+```
+
+**Intake** decides what the article is (title, subject sentence, what is in
+scope, and which other readings of the same words were set aside). **Outline**
+plans the sections, each with a purpose, a word target, and the specific
+questions it must answer. The article is then written a section at a time,
+each one seeing the plan and the draft so far, so sections neither repeat one
+another nor drift out of scope. The brief travels with the article through
+the rest of the loop: the evaluator and the reviser are both shown the
+specification the article was written to.
+
+The outline's `key_questions` are the retrieval layer's entry point — the
+things the article has committed to answering.
+
 Generation does not happen inside a request. A reasoning run takes tens of
 minutes, which no load balancer or mobile connection will hold open, so a
 request enqueues a job and clients follow its event log.
@@ -125,21 +146,30 @@ curl -N -H 'Last-Event-ID: 51' localhost:8080/api/articles/<id>/events
 | --- | --- |
 | `token` | `{stream, text}` — a chunk of that stream's answer |
 | `reasoning` | `{stream, text}` — a chunk of its reasoning trace |
-| `restart` | `{stream}` — discard this stream; a repair retry is answering again |
+| `restart` | `{stream}` — discard this stream; the authoritative text follows |
+| `phase` | `{name, detail, index, total}` — the pipeline step now running |
+| `brief` | The intake brief, parsed |
+| `outline` | The section plan, parsed |
 | `round` | The completed round, with its scores |
 | `converged` | The loop reached the quality threshold |
 | `done` | The final `ArticleState` |
 | `error` | `{message, state}` — the failure and any partial state |
 | `closed` | The job is finished; the stream ends |
 
-Streams are `article`, `evaluation`, `revision_plan`, `references`, `infobox`,
-`seealso`, and `category`.
+Streams are `brief`, `outline`, `article`, `evaluation`, `revision_plan`,
+`references`, `infobox`, `seealso`, and `category`.
+
+Only the `article` stream is meant to be painted as it arrives. The others
+carry JSON, and a half-arrived JSON object is not something to render — the
+brief and the outline are delivered parsed, as their own events.
 
 Token deltas are coalesced before they are logged. One reasoning run produced
 over eleven thousand deltas; batching turns that into a few dozen events
 without changing what the client reconstructs.
 
-Replaying a job's log from the beginning rebuilds the article exactly. A
+Replaying a job's log from the beginning rebuilds the article exactly: the
+server repaints the `article` stream from its own copy whenever the two could
+otherwise drift, so a `restart` is always followed by the authoritative text. A
 client that arrives after the job finished can skip the log entirely and read
 `GET /api/articles/{id}`.
 

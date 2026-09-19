@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"encyclopedia-ai/internal/orchestrator"
+	"encyclopedia-ai/internal/plan"
 )
 
 // Stream names used in token and reasoning events.
 const (
+	StreamBrief        = "brief"
+	StreamOutline      = "outline"
 	StreamArticle      = "article"
 	StreamEvaluation   = "evaluation"
 	StreamRevisionPlan = "revision_plan"
@@ -193,9 +196,20 @@ func (r *Runner) run(parent context.Context, job Job) {
 	})
 
 	state, err := orchestrator.RunArticleLoop(ctx, job.Topic, job.MaxRounds, r.Agent, orchestrator.LoopCallbacks{
+		OnBrief:        recorder.Sink(StreamBrief),
+		OnOutline:      recorder.Sink(StreamOutline),
 		OnArticle:      recorder.Sink(StreamArticle),
 		OnEvaluation:   recorder.Sink(StreamEvaluation),
 		OnRevisionPlan: recorder.Sink(StreamRevisionPlan),
+		OnPhase: func(phase orchestrator.Phase) {
+			recorder.Emit(EventPhase, phase)
+		},
+		OnBriefReady: func(brief *plan.Brief) {
+			recorder.Emit(EventBrief, brief)
+		},
+		OnOutlineReady: func(outline *plan.Outline) {
+			recorder.Emit(EventOutline, outline)
+		},
 		OnRoundComplete: func(round orchestrator.Round) {
 			recorder.Emit(EventRound, round)
 		},

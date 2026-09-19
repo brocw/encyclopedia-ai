@@ -30,26 +30,29 @@ Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests 
 
 ### Cybernetic Feedback Loop
 
-The system follows a Generate → [Evaluate → Compare → Plan → Revise]* → Metadata pipeline:
+The system follows an Intake → Outline → Draft → [Evaluate → Compare → Plan → Revise]* → Metadata pipeline:
 
 1. `POST /api/articles` enqueues a job; a worker runs `RunArticleLoop`
-2. **Actuator**: `GenerateArticle` (text model) writes the initial article
-3. **Sensor**: `EvaluateArticle` (structured model, JSON) scores the article on 5 dimensions and lists critical issues
-4. **Comparator**: `hasConverged` checks if overall score >= 8.0 with no critical issues; `isStagnant` detects score plateaus between rounds
-5. **Controller**: `PlanRevision` (structured model, JSON) produces targeted revision instructions from the evaluation
-6. **Actuator**: `ReviseArticle` (text model) applies the revision plan
-7. Loop repeats until convergence, stagnation, or max rounds
-8. **Metadata agents** (references, infobox, see-also, categories) run once in parallel on the final article
+2. **Framing**: `Intake` (structured model) turns the topic into a `plan.Brief` — title, subject sentence, scope, exclusions, rejected readings. Nothing is written until this exists.
+3. **Planning**: `Outline` (structured model) turns the brief into a `plan.Outline` — sections with a purpose, a word target, and the `key_questions` each must answer
+4. **Actuator**: `DraftLead` then `DraftSection` per section (text model). Each call sees the brief, the whole outline, and the draft so far, so sections neither overlap nor drift out of scope. The loop writes the headings itself.
+5. **Sensor**: `EvaluateArticle` (structured model, JSON) scores the article on 5 dimensions against the brief and lists critical issues
+6. **Comparator**: `hasConverged` checks if overall score >= 8.0 with no critical issues; `isStagnant` detects score plateaus between rounds
+7. **Controller**: `PlanRevision` (structured model, JSON) produces targeted revision instructions from the evaluation
+8. **Actuator**: `ReviseArticle` (text model) rewrites the article whole against the brief and the revision plan
+9. Loop repeats until convergence, stagnation, or max rounds
+10. **Metadata agents** (references, infobox, see-also, categories) run once in parallel on the final article
 
-All responses stream tokens via SSE. The frontend shows a round timeline with per-round quality scores, a convergence badge, and the live reasoning trace when a reasoning model is configured.
+All responses stream tokens via SSE. The frontend shows the article plan, a round timeline with per-round quality scores, a convergence badge, and the live reasoning trace when a reasoning model is configured. Progress is driven by `phase` events the pipeline emits, not inferred from which stream is producing tokens.
 
 The loop still grades itself: `factual_accuracy` is scored by a model with no access to evidence. Hardening that gate is M4.
 
 ### Backend Structure (`internal/`)
 
 - **`llm/`**: The provider boundary. `Provider.Stream` delivers `Delta{Content, Reasoning, Restart}`, keeping a reasoning trace out of article text and out of the JSON parsers. Implementations: `Ollama` (`/api/chat`, with a remembered fallback for models that reject `think`) and `OpenAI` (any OpenAI-compatible `/chat/completions`, reading both `reasoning` and `reasoning_content`). `StreamWithRepair` re-asks the model when an answer is empty or unparseable, and salvages fenced JSON locally. `ConfigFromEnv` is validated at start-up.
+- **`plan/`**: The two documents that come before the prose — `Brief` and `Outline`. They sit in their own package because both sides of the agent boundary read their fields, and because retrieval will hang evidence off `Outline.Questions()`. Parsing repairs what it can (unnamed or duplicated sections dropped, word targets clamped, an over-long outline truncated) and errors only on a document too broken to write from.
 - **`ai/`**: The agents. Each owns an embedded prompt and a model role (prose or structured) and calls through `llm`. Repair here is syntactic only; semantic validation of each agent's document stays in the orchestrator.
-- **`orchestrator/`**: Coordinates the cybernetic loop through the injectable `Agent` interface, whose methods stream to an `llm.Sink`. `ArticleState` records status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
+- **`orchestrator/`**: Coordinates the pipeline through the injectable `Agent` interface, whose methods stream to an `llm.Sink`. `draft.go` holds the pre-prose half: framing, planning, and section-by-section drafting through `articleWriter`. `ArticleState` records the brief, the outline, status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
 - **`jobs/`**: generation as a background job. `Runner` drains a queue of `Job`s with a worker pool; `Recorder` coalesces token deltas into batched events before they reach the log; `Broker` wakes live subscribers; `Store` persists jobs and their append-only event logs, with `MemoryStore` as the default implementation. Event sequence numbers are contiguous from 1, which is what makes a stream resumable.
 - **`handlers/`**: the job API — enqueue, read, stream, cancel. The SSE handler replays a job's log from the client's last sequence number and then follows it live, so a dropped connection resumes without a gap.
 
@@ -59,7 +62,11 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 
 ### Key Patterns
 
-- **Two-model strategy**: a text model for prose generation/revision; a structured model in JSON mode for evaluation, revision plans, and metadata. Both are configurable and may be the same model.
+- **The plan is the specification**: everything that writes or judges the article is shown the brief. `completeness` means "covers what the brief put in scope"; off-topic means "outside it". An agent asked to judge an article against nothing will judge it against nothing.
+- **The server owns the article text**: `articleWriter` assembles the article and mirrors it to the `article` stream. Its copy is authoritative, so whenever the stream could drift from it — a repair retry, or a section whose answer needed cleaning — it emits `Restart` and repaints. A client never has to reconstruct what the server already knows.
+- **Repair what is repairable, fail on what is not**: `plan.ParseOutline` drops a nameless section and clamps an absurd word target, because an article is still writable. It errors on a one-section outline, because there is nothing to write.
+
+- **Two-model strategy**: a text model for prose drafting and revision; a structured model in JSON mode for intake, outlining, evaluation, revision plans, and metadata. Both are configurable and may be the same model.
 - **Provider independence**: nothing above `internal/llm` knows which backend is in use. Keep provider-specific behaviour inside that package.
 - **Context window**: a reasoning trace competes with the answer for the context window. Ollama's 4096-token default truncates the answer away entirely, so `LLM_CONTEXT_TOKENS` must be raised whenever `LLM_THINK` is on. When an answer comes back empty, `StreamWithRepair` also steps the reasoning budget down for the retry, since re-asking at the same budget repeats the failure.
 - **Separated reasoning**: answer tokens and reasoning tokens travel on different channels end to end — `llm.Delta`, then `<stream>_token` and `<stream>_reasoning` SSE events, then the collapsible "Editor's notes" panel. A reasoning trace must never reach article text or a JSON parser.
@@ -75,9 +82,10 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 ### Planned work
 
 `docs/DEPLOYMENT.md` holds the deployment plan and the milestone ladder. M0
-(the provider boundary) is done. M1–M5 replace one-shot generation with an
-outline → research → grounded drafting → verification pipeline, at which point
-the references agent is deleted rather than improved.
+(the provider boundary), M1 (jobs and a resumable log), and M2 (intake,
+outline, section drafting) are done. M3–M5 add retrieval, grounded drafting,
+and verification, at which point the references agent is deleted rather than
+improved — `Outline.Questions()` is where retrieval attaches.
 
 ### Current limitations
 

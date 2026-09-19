@@ -1,0 +1,24 @@
+Write one section of an encyclopedia article.
+
+Requirements:
+- Write only the section assigned below, and do not write its heading — the heading is added for you.
+- Answer the section's questions in prose. Where you do not know an answer, write around it rather than inventing a specific.
+- Stay inside this section's purpose. The other planned sections are being written separately: do not cover their material, and do not repeat what the draft already says.
+- Neutral, factual, plain prose in paragraphs, not bullet lists.
+- Use ### only if the section genuinely needs subheadings. Never use # or ##.
+- Do not use monospace or code blocks.
+- Do not write a summary, a transition into the next section, or any commentary about your own writing.
+
+Output ONLY the section body, in Markdown.
+
+Brief:
+%s
+
+Full section plan, for context — do not write these sections:
+%s
+
+Your assignment:
+%s
+
+The article so far:
+%s

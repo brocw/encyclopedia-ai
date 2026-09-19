@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"encyclopedia-ai/internal/llm"
+	"encyclopedia-ai/internal/plan"
 )
 
 // Agent is the AI boundary used by the loop. The production implementation is
@@ -18,8 +19,11 @@ import (
 // llm.Sink. The sink separates reasoning tokens from answer tokens, so a
 // model's deliberation never reaches the article text or the JSON parsers.
 type Agent interface {
-	GenerateArticle(context.Context, string, llm.Sink) (string, error)
-	EvaluateArticle(context.Context, string, llm.Sink) (string, error)
+	Intake(context.Context, string, llm.Sink) (string, error)
+	Outline(context.Context, string, llm.Sink) (string, error)
+	DraftLead(context.Context, string, string, llm.Sink) (string, error)
+	DraftSection(context.Context, string, string, plan.Section, string, llm.Sink) (string, error)
+	EvaluateArticle(context.Context, string, string, llm.Sink) (string, error)
 	PlanRevision(context.Context, string, string, llm.Sink) (string, error)
 	ReviseArticle(context.Context, string, string, string, llm.Sink) (string, error)
 	References(context.Context, string, llm.Sink) (string, error)
@@ -61,18 +65,20 @@ const (
 )
 
 type ArticleState struct {
-	Topic             string   `json:"topic"`
-	CurrentArticle    string   `json:"current_article"`
-	References        string   `json:"references"`
-	Infobox           string   `json:"infobox"`
-	SeeAlso           string   `json:"see_also"`
-	Categories        string   `json:"categories"`
-	Rounds            []Round  `json:"rounds"`
-	Converged         bool     `json:"converged"`
-	Status            string   `json:"status"`
-	TerminationReason string   `json:"termination_reason"`
-	Error             string   `json:"error,omitempty"`
-	Warnings          []string `json:"warnings,omitempty"`
+	Topic             string        `json:"topic"`
+	Brief             *plan.Brief   `json:"brief,omitempty"`
+	Outline           *plan.Outline `json:"outline,omitempty"`
+	CurrentArticle    string        `json:"current_article"`
+	References        string        `json:"references"`
+	Infobox           string        `json:"infobox"`
+	SeeAlso           string        `json:"see_also"`
+	Categories        string        `json:"categories"`
+	Rounds            []Round       `json:"rounds"`
+	Converged         bool          `json:"converged"`
+	Status            string        `json:"status"`
+	TerminationReason string        `json:"termination_reason"`
+	Error             string        `json:"error,omitempty"`
+	Warnings          []string      `json:"warnings,omitempty"`
 }
 
 // MetadataCallbacks holds stream sinks for the metadata agents that run after the loop.
@@ -83,14 +89,38 @@ type MetadataCallbacks struct {
 	OnCategories llm.Sink
 }
 
-// LoopCallbacks holds a stream sink for each phase of the cybernetic loop.
+// LoopCallbacks holds a stream sink for each phase of the cybernetic loop,
+// plus the notifications for documents and milestones the loop produces.
+//
+// The sinks carry raw model output, including the reasoning trace. The
+// OnBriefReady and OnOutlineReady callbacks carry the parsed documents, which
+// is what a client should render: nothing downstream should be reading a
+// half-arrived JSON object off a token stream.
 type LoopCallbacks struct {
-	OnArticle       llm.Sink
-	OnEvaluation    llm.Sink
-	OnRevisionPlan  llm.Sink
+	OnBrief        llm.Sink
+	OnOutline      llm.Sink
+	OnArticle      llm.Sink
+	OnEvaluation   llm.Sink
+	OnRevisionPlan llm.Sink
+
+	OnPhase         func(Phase)
+	OnBriefReady    func(*plan.Brief)
+	OnOutlineReady  func(*plan.Outline)
 	OnRoundComplete func(Round)
 	OnConverged     func()
 	Metadata        MetadataCallbacks
+}
+
+func (cb LoopCallbacks) phase(p Phase) {
+	if cb.OnPhase != nil {
+		cb.OnPhase(p)
+	}
+}
+
+func (cb LoopCallbacks) roundComplete(round Round) {
+	if cb.OnRoundComplete != nil {
+		cb.OnRoundComplete(round)
+	}
 }
 
 type agentResult struct {
@@ -332,9 +362,9 @@ func failureState(topic, article string, rounds []Round, reason string, err erro
 	return state
 }
 
-// RunArticleLoop executes Generate → [Evaluate → Compare → Plan → Revise]* → Metadata.
-// maxRounds is the maximum number of evaluated rounds. The last round is never
-// revised without a subsequent evaluation.
+// RunArticleLoop executes Intake → Outline → Draft → [Evaluate → Compare →
+// Plan → Revise]* → Metadata. maxRounds is the maximum number of evaluated
+// rounds. The last round is never revised without a subsequent evaluation.
 func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agent, cb LoopCallbacks) (*ArticleState, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -346,12 +376,27 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 		return failureState(topic, "", nil, TerminationError, fmt.Errorf("max rounds must be greater than zero")), fmt.Errorf("max rounds must be greater than zero")
 	}
 
-	article, err := agent.GenerateArticle(ctx, topic, cb.OnArticle)
-	if err != nil {
-		wrapped := fmt.Errorf("generate article: %w", err)
-		return failureState(topic, article, nil, TerminationError, wrapped), wrapped
+	// brief and outline are captured by fail, so a failure at any later point
+	// still returns the plan the article was being written to.
+	var brief *plan.Brief
+	var outline *plan.Outline
+	fail := func(article string, rounds []Round, reason string, err error) *ArticleState {
+		state := failureState(topic, article, rounds, reason, err)
+		state.Brief, state.Outline = brief, outline
+		if brief != nil {
+			state.Topic = brief.Title
+		}
+		return state
 	}
-	log.Printf("Finished generating article '%s'", topic)
+
+	brief, outline, article, err := draftArticle(ctx, agent, topic, cb)
+	if err != nil {
+		wrapped := fmt.Errorf("draft article: %w", err)
+		return fail(article, nil, TerminationError, wrapped), wrapped
+	}
+	title := brief.Title
+	briefText := brief.Prompt()
+	log.Printf("Finished drafting article %q", title)
 
 	rounds := make([]Round, 0, maxRounds)
 	converged := false
@@ -361,20 +406,21 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 	hasBestEvaluation := false
 
 	for roundNumber := 1; roundNumber <= maxRounds; roundNumber++ {
-		log.Printf("Starting evaluation round %d for '%s'", roundNumber, topic)
+		log.Printf("Starting evaluation round %d for %q", roundNumber, title)
+		cb.phase(Phase{Name: PhaseEvaluate, Detail: title, Index: roundNumber, Total: maxRounds})
 
-		evaluationRaw, err := agent.EvaluateArticle(ctx, article, cb.OnEvaluation)
+		evaluationRaw, err := agent.EvaluateArticle(ctx, briefText, article, cb.OnEvaluation)
 		if err != nil {
 			wrapped := fmt.Errorf("evaluate article round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
-			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
 
 		evaluation, err := parseEvaluation(evaluationRaw)
 		if err != nil {
 			wrapped := fmt.Errorf("parse evaluation round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
-			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
 		if !hasBestEvaluation || isBetterEvaluation(evaluation, bestEvaluation) {
 			bestArticle = article
@@ -386,22 +432,18 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 
 		if hasConverged(evaluation) {
 			rounds = append(rounds, round)
-			if cb.OnRoundComplete != nil {
-				cb.OnRoundComplete(round)
-			}
+			cb.roundComplete(round)
 			converged = true
 			terminationReason = TerminationConverged
-			log.Printf("Article '%s' converged at round %d (overall: %.1f)", topic, roundNumber, evaluation.Overall)
+			log.Printf("Article %q converged at round %d (overall: %.1f)", title, roundNumber, evaluation.Overall)
 			break
 		}
 
 		if roundNumber > 1 && isStagnant(evaluation, rounds[len(rounds)-1].Evaluation) {
 			rounds = append(rounds, round)
-			if cb.OnRoundComplete != nil {
-				cb.OnRoundComplete(round)
-			}
+			cb.roundComplete(round)
 			terminationReason = TerminationStagnated
-			log.Printf("Article '%s' stagnated at round %d (overall: %.1f)", topic, roundNumber, evaluation.Overall)
+			log.Printf("Article %q stagnated at round %d (overall: %.1f)", title, roundNumber, evaluation.Overall)
 			break
 		}
 
@@ -409,45 +451,49 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 		// recorded round is the article returned to the user.
 		if roundNumber == maxRounds {
 			rounds = append(rounds, round)
-			if cb.OnRoundComplete != nil {
-				cb.OnRoundComplete(round)
-			}
+			cb.roundComplete(round)
 			break
 		}
 
-		plan, err := agent.PlanRevision(ctx, article, evaluationRaw, cb.OnRevisionPlan)
+		cb.phase(Phase{Name: PhasePlan, Detail: title, Index: roundNumber, Total: maxRounds})
+		revisionPlan, err := agent.PlanRevision(ctx, article, evaluationRaw, cb.OnRevisionPlan)
 		if err != nil {
 			wrapped := fmt.Errorf("plan revision round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
 			rounds = append(rounds, round)
-			if cb.OnRoundComplete != nil {
-				cb.OnRoundComplete(round)
-			}
-			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+			cb.roundComplete(round)
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
-		if err := validateRevisionPlan(plan); err != nil {
+		if err := validateRevisionPlan(revisionPlan); err != nil {
 			wrapped := fmt.Errorf("validate revision plan round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
 			rounds = append(rounds, round)
-			if cb.OnRoundComplete != nil {
-				cb.OnRoundComplete(round)
-			}
-			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+			cb.roundComplete(round)
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
-		round.RevisionPlan = plan
+		round.RevisionPlan = revisionPlan
 		rounds = append(rounds, round)
-		if cb.OnRoundComplete != nil {
-			cb.OnRoundComplete(round)
-		}
+		cb.roundComplete(round)
 
-		revised, err := agent.ReviseArticle(ctx, topic, article, plan, cb.OnArticle)
+		cb.phase(Phase{Name: PhaseRevise, Detail: title, Index: roundNumber, Total: maxRounds})
+
+		// The reviser rewrites the article whole, so it starts from an empty
+		// writer: the stream is repainted with the revision, not appended to.
+		reviser := &articleWriter{sink: cb.OnArticle}
+		revised, err := agent.ReviseArticle(ctx, briefText, article, revisionPlan, reviser.Draft())
 		if err != nil {
 			wrapped := fmt.Errorf("revise article round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
-			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
+		if revised = cleanProse(revised); revised == "" {
+			wrapped := fmt.Errorf("revise article round %d: the model returned no prose", roundNumber)
+			log.Printf("%v", wrapped)
+			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
+		}
+		reviser.Commit(revised)
 		article = revised
-		log.Printf("Finished revision round %d for '%s'", roundNumber, topic)
+		log.Printf("Finished revision round %d for %q", roundNumber, title)
 	}
 
 	if converged && cb.OnConverged != nil {
@@ -455,9 +501,12 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 	}
 
 	article = bestArticle
-	references, infobox, seeAlso, categories, metadataErrs := runMetadataAgents(ctx, agent, topic, article, cb.Metadata)
+	cb.phase(Phase{Name: PhaseMetadata, Detail: title})
+	references, infobox, seeAlso, categories, metadataErrs := runMetadataAgents(ctx, agent, title, article, cb.Metadata)
 	state := &ArticleState{
-		Topic:             topic,
+		Topic:             title,
+		Brief:             brief,
+		Outline:           outline,
 		CurrentArticle:    article,
 		References:        references,
 		Infobox:           infobox,
@@ -474,7 +523,7 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 		for _, metadataErr := range metadataErrs {
 			state.Warnings = append(state.Warnings, metadataErr.Error())
 		}
-		log.Printf("Warning: %d metadata agent(s) had errors for '%s'", len(metadataErrs), topic)
+		log.Printf("Warning: %d metadata agent(s) had errors for %q", len(metadataErrs), title)
 	}
 
 	return state, nil

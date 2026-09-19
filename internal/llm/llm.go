@@ -61,6 +61,24 @@ func (t ThinkLevel) Effort() string {
 	}
 }
 
+// Reduce steps the reasoning budget down one level.
+//
+// An empty answer usually means the trace consumed the whole context window,
+// so a retry at the same budget fails the same way. Spending less of the
+// window on thinking leaves room for the answer.
+func (t ThinkLevel) Reduce() ThinkLevel {
+	switch t {
+	case ThinkHigh:
+		return ThinkMedium
+	case ThinkMedium:
+		return ThinkLow
+	case ThinkLow, ThinkOn:
+		return ThinkOff
+	default:
+		return ThinkOff
+	}
+}
+
 // ParseThinkLevel reads a configured value, defaulting to ThinkOff.
 func ParseThinkLevel(value string) (ThinkLevel, error) {
 	switch level := ThinkLevel(strings.ToLower(strings.TrimSpace(value))); level {
@@ -94,6 +112,11 @@ type Request struct {
 	Schema      json.RawMessage
 	Temperature float64
 	MaxTokens   int
+
+	// NumCtx is the context window in tokens. Zero uses the provider's
+	// default, which for Ollama is 4096 — far too small for a reasoning
+	// model, whose trace alone can exceed it and truncate the answer away.
+	NumCtx int
 }
 
 // Delta is one increment of a streamed response.

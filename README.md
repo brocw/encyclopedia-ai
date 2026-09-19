@@ -40,6 +40,7 @@ The application listens on `http://localhost:8080` by default. Configuration is 
 | `LLM_STRUCTURED_MODEL` | `mistral` | Evaluation, planning, and metadata model |
 | `LLM_THINK` | `off` | Reasoning budget: `off`, `on`, `low`, `medium`, `high` |
 | `LLM_ATTEMPTS` | `3` | Provider calls allowed per agent call, including repairs |
+| `LLM_CONTEXT_TOKENS` | provider default | Context window. Raise this for reasoning models |
 | `LLM_TIMEOUT_SECONDS` | `600` | Maximum duration of one model request |
 | `LLM_BASE_URL` | provider default | Ollama host, or OpenAI-compatible endpoint |
 | `LLM_API_KEY` | — | Required when `LLM_PROVIDER=openai`; `OPENROUTER_API_KEY` also works |
@@ -58,8 +59,20 @@ rather than failing on the first request.
 Locally, pull a model that supports thinking and ask for a trace:
 
 ```bash
-LLM_TEXT_MODEL=gpt-oss:20b LLM_STRUCTURED_MODEL=gpt-oss:20b LLM_THINK=high ./start.sh
+LLM_TEXT_MODEL=gpt-oss:20b \
+LLM_STRUCTURED_MODEL=gpt-oss:20b \
+LLM_THINK=high \
+LLM_CONTEXT_TOKENS=16384 \
+./start.sh
 ```
+
+**Set `LLM_CONTEXT_TOKENS` when using a reasoning model.** Ollama's default
+context window is 4096 tokens, and a single trace can exceed it on its own: the
+answer is then truncated away and the agent returns nothing. Measured on
+`gpt-oss:20b` at `LLM_THINK=high`, one metadata agent produced 36,000
+characters of reasoning and no answer until the window was raised. A larger
+window costs VRAM, so on a 16 GB card expect to trade context against model
+size.
 
 Against OpenRouter:
 

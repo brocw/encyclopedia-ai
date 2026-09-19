@@ -177,3 +177,96 @@ func TestStreamWithRepairAccumulatesUsageAcrossAttempts(t *testing.T) {
 		t.Fatalf("usage = %+v, want every attempt billed", response.Usage)
 	}
 }
+
+// An empty answer means the reasoning trace crowded the answer out of the
+// context window. Retrying at the same budget would repeat the failure.
+func TestStreamWithRepairReducesTheReasoningBudgetOnAnEmptyAnswer(t *testing.T) {
+	provider := &recordingThinkProvider{answers: []Response{
+		{Reasoning: "still deliberating"},
+		{Reasoning: "still deliberating"},
+		{Content: `{"done":true}`},
+	}}
+
+	response, err := StreamWithRepair(context.Background(), provider, Request{
+		Messages: []Message{User("plan")},
+		Think:    ThinkHigh,
+		Format:   FormatJSON,
+	}, nil, 3, nil)
+	if err != nil {
+		t.Fatalf("StreamWithRepair returned error: %v", err)
+	}
+	if response.Attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", response.Attempts)
+	}
+
+	want := []ThinkLevel{ThinkHigh, ThinkMedium, ThinkLow}
+	if len(provider.think) != len(want) {
+		t.Fatalf("think levels = %v", provider.think)
+	}
+	for i, level := range want {
+		if provider.think[i] != level {
+			t.Errorf("attempt %d used think %q, want %q", i+1, provider.think[i], level)
+		}
+	}
+}
+
+// A validation failure is not a budget problem, so the trace is left alone.
+func TestStreamWithRepairKeepsTheReasoningBudgetOnAValidationFailure(t *testing.T) {
+	provider := &recordingThinkProvider{answers: []Response{
+		{Content: `{"instructions":[]}`},
+		{Content: `{"instructions":["tighten the lede"]}`},
+	}}
+
+	validate := func(content string) error {
+		if strings.Contains(content, `"instructions":[]`) {
+			return errors.New("the plan must contain at least one instruction")
+		}
+		return nil
+	}
+
+	if _, err := StreamWithRepair(context.Background(), provider, Request{
+		Messages: []Message{User("plan")},
+		Think:    ThinkHigh,
+		Format:   FormatJSON,
+	}, validate, 3, nil); err != nil {
+		t.Fatalf("StreamWithRepair returned error: %v", err)
+	}
+	for i, level := range provider.think {
+		if level != ThinkHigh {
+			t.Errorf("attempt %d used think %q, want it unchanged", i+1, level)
+		}
+	}
+}
+
+func TestThinkLevelReduce(t *testing.T) {
+	cases := map[ThinkLevel]ThinkLevel{
+		ThinkHigh:   ThinkMedium,
+		ThinkMedium: ThinkLow,
+		ThinkLow:    ThinkOff,
+		ThinkOn:     ThinkOff,
+		ThinkOff:    ThinkOff,
+	}
+	for input, want := range cases {
+		if got := input.Reduce(); got != want {
+			t.Errorf("%q.Reduce() = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// recordingThinkProvider records the reasoning budget of each attempt.
+type recordingThinkProvider struct {
+	answers []Response
+	think   []ThinkLevel
+	calls   int
+}
+
+func (p *recordingThinkProvider) Name() string { return "recording" }
+
+func (p *recordingThinkProvider) Stream(_ context.Context, req Request, sink Sink) (Response, error) {
+	p.think = append(p.think, req.Think)
+	response := p.answers[min(p.calls, len(p.answers)-1)]
+	p.calls++
+	sink.Emit(Delta{Reasoning: response.Reasoning})
+	sink.Emit(Delta{Content: response.Content})
+	return response, nil
+}

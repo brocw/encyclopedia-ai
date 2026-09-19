@@ -34,6 +34,11 @@ type Config struct {
 	// Attempts bounds the repair retries of one logical call.
 	Attempts int
 
+	// ContextTokens is the context window. Zero keeps the provider default.
+	// Ollama's default of 4096 truncates a reasoning model's answer away, so
+	// a reasoning run should raise it.
+	ContextTokens int
+
 	Timeout time.Duration
 
 	// BaseURL is the Ollama host, or the OpenAI-compatible endpoint.
@@ -82,19 +87,29 @@ func ConfigFromEnv() (Config, error) {
 		attempts = parsed
 	}
 
+	contextTokens := 0
+	if raw := env("LLM_CONTEXT_TOKENS", "OLLAMA_NUM_CTX"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return Config{}, fmt.Errorf("llm: context tokens must be a positive integer, got %q", raw)
+		}
+		contextTokens = parsed
+	}
+
 	think, err := ParseThinkLevel(env("LLM_THINK"))
 	if err != nil {
 		return Config{}, fmt.Errorf("llm: %w", err)
 	}
 
 	config := Config{
-		Provider: provider,
-		Think:    think,
-		Attempts: attempts,
-		Timeout:  timeout,
-		APIKey:   env("LLM_API_KEY", "OPENROUTER_API_KEY"),
-		Referer:  env("LLM_REFERER"),
-		Title:    env("LLM_TITLE"),
+		Provider:      provider,
+		Think:         think,
+		Attempts:      attempts,
+		ContextTokens: contextTokens,
+		Timeout:       timeout,
+		APIKey:        env("LLM_API_KEY", "OPENROUTER_API_KEY"),
+		Referer:       env("LLM_REFERER"),
+		Title:         env("LLM_TITLE"),
 	}
 
 	switch provider {

@@ -60,6 +60,7 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 
 - **Two-model strategy**: a text model for prose generation/revision; a structured model in JSON mode for evaluation, revision plans, and metadata. Both are configurable and may be the same model.
 - **Provider independence**: nothing above `internal/llm` knows which backend is in use. Keep provider-specific behaviour inside that package.
+- **Context window**: a reasoning trace competes with the answer for the context window. Ollama's 4096-token default truncates the answer away entirely, so `LLM_CONTEXT_TOKENS` must be raised whenever `LLM_THINK` is on. When an answer comes back empty, `StreamWithRepair` also steps the reasoning budget down for the retry, since re-asking at the same budget repeats the failure.
 - **Separated reasoning**: answer tokens and reasoning tokens travel on different channels end to end — `llm.Delta`, then `<stream>_token` and `<stream>_reasoning` SSE events, then the collapsible "Editor's notes" panel. A reasoning trace must never reach article text or a JSON parser.
 - **Token-level streaming**: Each AI call takes an `llm.Sink` invoked per increment, enabling real-time SSE pushes via `http.Flusher`. Call `Sink.Emit`, never the func value, so a nil sink stays safe.
 - **Cancellation propagation**: Browser aborts and disconnected SSE clients cancel the request context passed through the handler, orchestrator, and provider.

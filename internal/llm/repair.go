@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,7 @@ func StreamWithRepair(ctx context.Context, provider Provider, req Request, valid
 
 	var total Usage
 	messages := req.Messages
+	think := req.Think
 	var lastErr error
 
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -47,6 +49,7 @@ func StreamWithRepair(ctx context.Context, provider Provider, req Request, valid
 
 		call := req
 		call.Messages = messages
+		call.Think = think
 		response, err := provider.Stream(ctx, call, sink)
 		total.Add(response.Usage)
 
@@ -75,6 +78,13 @@ func StreamWithRepair(ctx context.Context, provider Provider, req Request, valid
 		log.Printf("[llm] %s attempt %d/%d rejected: %v", provider.Name(), attempt, attempts, lastErr)
 		if attempt < attempts {
 			messages = appendRepairTurn(req.Messages, response.Content, lastErr)
+			// An empty answer means the trace crowded the answer out of the
+			// context window. Re-asking at the same budget repeats the
+			// failure, so spend less of the window on thinking.
+			if errors.Is(lastErr, ErrEmptyAnswer) && think.Enabled() {
+				think = think.Reduce()
+				log.Printf("[llm] reducing the reasoning budget to %q for the retry", cmp.Or(string(think), "off"))
+			}
 		}
 	}
 

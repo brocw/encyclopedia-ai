@@ -65,6 +65,7 @@ func normalizeOllamaBaseURL(value string) string {
 type ollamaOptions struct {
 	Temperature float64 `json:"temperature,omitempty"`
 	NumPredict  int     `json:"num_predict,omitempty"`
+	NumCtx      int     `json:"num_ctx,omitempty"`
 }
 
 type ollamaChatRequest struct {
@@ -127,8 +128,12 @@ func (o *Ollama) stream(ctx context.Context, req Request, think ThinkLevel, sink
 			payload.Think = true
 		}
 	}
-	if req.Temperature > 0 || req.MaxTokens > 0 {
-		payload.Options = &ollamaOptions{Temperature: req.Temperature, NumPredict: req.MaxTokens}
+	if req.Temperature > 0 || req.MaxTokens > 0 || req.NumCtx > 0 {
+		payload.Options = &ollamaOptions{
+			Temperature: req.Temperature,
+			NumPredict:  req.MaxTokens,
+			NumCtx:      req.NumCtx,
+		}
 	}
 
 	body, err := json.Marshal(payload)

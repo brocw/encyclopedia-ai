@@ -90,6 +90,7 @@ func (c *Client) prose(ctx context.Context, prompt string, sink llm.Sink) (strin
 		Model:    c.Config.TextModel,
 		Messages: []llm.Message{llm.System(proseSystemPrompt), llm.User(prompt)},
 		Think:    c.Config.Think,
+		NumCtx:   c.Config.ContextTokens,
 	}, sink)
 }
 
@@ -104,6 +105,7 @@ func (c *Client) structured(ctx context.Context, prompt string, sink llm.Sink) (
 		Messages: []llm.Message{llm.System(structuredSystemPrompt), llm.User(prompt)},
 		Think:    c.Config.Think,
 		Format:   llm.FormatJSON,
+		NumCtx:   c.Config.ContextTokens,
 	}, sink)
 }
 

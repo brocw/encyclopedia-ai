@@ -115,3 +115,21 @@ func TestParseThinkLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigFromEnvReadsTheContextWindow(t *testing.T) {
+	t.Setenv("LLM_CONTEXT_TOKENS", "16384")
+	config, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv returned error: %v", err)
+	}
+	if config.ContextTokens != 16384 {
+		t.Fatalf("context tokens = %d", config.ContextTokens)
+	}
+}
+
+func TestConfigFromEnvRejectsABadContextWindow(t *testing.T) {
+	t.Setenv("LLM_CONTEXT_TOKENS", "-1")
+	if _, err := ConfigFromEnv(); err == nil {
+		t.Fatal("ConfigFromEnv accepted a negative context window")
+	}
+}

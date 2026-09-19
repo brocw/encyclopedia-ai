@@ -169,3 +169,20 @@ func TestOllamaSendsJSONFormat(t *testing.T) {
 		t.Fatalf("request did not request JSON format: %s", payload)
 	}
 }
+
+func TestOllamaSendsTheContextWindow(t *testing.T) {
+	var payload string
+	provider := NewOllama("http://ollama.test", &http.Client{
+		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(request.Body)
+			payload = string(body)
+			return testResponse(http.StatusOK, `{"message":{"content":"ok"},"done":true}`+"\n"), nil
+		}),
+	})
+	if _, err := provider.Stream(context.Background(), Request{Model: "m", NumCtx: 16384}, nil); err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if !strings.Contains(payload, `"num_ctx":16384`) {
+		t.Fatalf("request did not carry the context window: %s", payload)
+	}
+}

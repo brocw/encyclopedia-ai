@@ -550,6 +550,75 @@ a:visited {
   padding-bottom: 12px;
 }
 
+.generation-notice {
+  margin: 8px 0 14px;
+  padding: 8px 10px;
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+  font-size: 13px;
+}
+
+.generation-notice.warning {
+  border-color: #ac6600;
+  background: #fef6e7;
+}
+
+.generation-notice.error {
+  border-color: #d33;
+  background: #fee7e6;
+}
+
+.secondary-button {
+  background: #f8f9fa;
+  border: 1px solid #a2a9b1;
+  color: #202122;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 2px;
+}
+
+.secondary-button:hover {
+  background: #eaecf0;
+}
+
+#cancelButton {
+  display: block;
+  margin: 0 auto 12px;
+}
+
+.article-actions {
+  margin-bottom: 10px;
+}
+
+.article-editor {
+  margin: 10px 0 18px;
+  padding: 12px;
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+}
+
+.article-editor label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+#articleTextarea {
+  display: block;
+  width: 100%;
+  min-height: 260px;
+  padding: 8px;
+  border: 1px solid #a2a9b1;
+  font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* === Rounds Input === */
 
 .rounds-label {
@@ -651,6 +720,11 @@ a:visited {
   margin-bottom: 2px;
 }
 
+.draft-button {
+  margin-top: 9px;
+  font-size: 12px;
+}
+
 /* === Score Colors === */
 
 .score-green {
@@ -672,4 +746,46 @@ a:visited {
 
 .hidden {
   display: none !important;
+}
+
+@media (max-width: 760px) {
+  .wiki-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wiki-search {
+    width: 100%;
+  }
+
+  #topicInput {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+  }
+
+  .wiki-layout {
+    display: block;
+  }
+
+  .wiki-sidebar {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid #a7d7f9;
+  }
+
+  .wiki-content {
+    border-right: none;
+    padding: 16px;
+  }
+
+  .wiki-infobox {
+    float: none;
+    width: 100%;
+    margin: 0 0 16px;
+  }
 }

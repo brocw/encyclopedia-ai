@@ -3,15 +3,80 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 )
 
-var apiURL string = "http://localhost:11434/api/generate"
+const (
+	defaultAPIURL          = "http://localhost:11434/api/generate"
+	defaultTextModel       = "llama3.1"
+	defaultStructuredModel = "mistral"
+	defaultTimeout         = 10 * time.Minute
+	maxStreamLineSize      = 4 * 1024 * 1024
+)
+
+// Client is the Ollama-backed implementation of the article-generation agents.
+// Its fields are exported so applications and tests can configure the client
+// without relying on package globals.
+type Client struct {
+	APIURL          string
+	TextModel       string
+	StructuredModel string
+	HTTPClient      *http.Client
+}
+
+// NewClient creates an Ollama client. Empty values use the application defaults.
+func NewClient(apiURL, textModel, structuredModel string, httpClient *http.Client) *Client {
+	if apiURL == "" {
+		apiURL = defaultAPIURL
+	}
+	if textModel == "" {
+		textModel = defaultTextModel
+	}
+	if structuredModel == "" {
+		structuredModel = defaultStructuredModel
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	}
+	return &Client{
+		APIURL:          apiURL,
+		TextModel:       textModel,
+		StructuredModel: structuredModel,
+		HTTPClient:      httpClient,
+	}
+}
+
+// NewClientFromEnv reads optional Ollama configuration from the environment.
+// OLLAMA_TIMEOUT_SECONDS controls the total duration of one request.
+func NewClientFromEnv() *Client {
+	timeout := defaultTimeout
+	if seconds, err := strconv.Atoi(os.Getenv("OLLAMA_TIMEOUT_SECONDS")); err == nil && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	return NewClient(
+		os.Getenv("OLLAMA_API_URL"),
+		os.Getenv("OLLAMA_TEXT_MODEL"),
+		os.Getenv("OLLAMA_STRUCTURED_MODEL"),
+		&http.Client{Timeout: timeout},
+	)
+}
+
+// DefaultClient returns the process-wide production client.
+func DefaultClient() *Client {
+	return defaultClient
+}
+
+var defaultClient = NewClientFromEnv()
 
 //go:embed generate_prompt.txt
 var generatePrompt string
@@ -21,9 +86,6 @@ var revisePrompt string
 
 //go:embed categorize_prompt.txt
 var categorizePrompt string
-
-//go:embed factcheck_prompt.txt
-var factcheckPrompt string
 
 //go:embed references_prompt.txt
 var referencesPrompt string
@@ -40,7 +102,6 @@ var evaluatePrompt string
 //go:embed revision_plan_prompt.txt
 var revisionPlanPrompt string
 
-// JSON structure for a request to Ollama API
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
@@ -48,214 +109,124 @@ type ollamaRequest struct {
 	Format string `json:"format,omitempty"`
 }
 
-// JSON structure for a response from the Ollama API
 type ollamaResponse struct {
 	Response string `json:"response"`
 	Done     bool   `json:"done"`
+	Error    string `json:"error,omitempty"`
 }
 
-// Sends prompts to a specific model (non-streaming)
-func callOllama(model, prompt string) (string, error) {
-	log.Printf("[ollama] Starting request to model '%s'...", model)
-
-	// Prepare the request data
-	reqData := ollamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: false, // Full response
+// callStreaming is the one streaming implementation used by all agents.
+// Ollama emits newline-delimited JSON, one object per line.
+func (c *Client) callStreaming(ctx context.Context, model, prompt, format string, onToken func(string)) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || c.HTTPClient == nil {
+		return "", fmt.Errorf("ollama client is not configured")
 	}
 
+	reqData := ollamaRequest{Model: model, Prompt: prompt, Stream: true, Format: format}
 	jsonData, err := json.Marshal(reqData)
 	if err != nil {
-		return "", fmt.Errorf("Error marshalling json: %w", err)
+		return "", fmt.Errorf("marshal Ollama request: %w", err)
 	}
 
-	// Send HTTP POST request
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIURL, bytes.NewReader(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("Error sending request to ollama: %w", err)
+		return "", fmt.Errorf("create Ollama request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	// Read, parse response
-	body, err := io.ReadAll(resp.Body)
+	log.Printf("[ollama-stream] Starting request to model '%s'...", model)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Error reading response body: %w", err)
+		return "", fmt.Errorf("send Ollama request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+		if readErr != nil {
+			return "", fmt.Errorf("Ollama returned HTTP %s (read error: %w)", resp.Status, readErr)
+		}
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return "", fmt.Errorf("Ollama returned HTTP %s: %s", resp.Status, message)
 	}
 
-	var ollamaResp ollamaResponse
-	if err := json.Unmarshal(body, &ollamaResp); err != nil {
-		return "", fmt.Errorf("Error unmarshalling ollama response: %w", err)
+	var full strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), maxStreamLineSize)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var chunk ollamaResponse
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			return full.String(), fmt.Errorf("decode Ollama stream: %w", err)
+		}
+		if chunk.Error != "" {
+			return full.String(), fmt.Errorf("Ollama error: %s", chunk.Error)
+		}
+		if chunk.Response != "" {
+			full.WriteString(chunk.Response)
+			if onToken != nil {
+				onToken(chunk.Response)
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return full.String(), fmt.Errorf("read Ollama stream: %w", err)
 	}
 
-	response := ollamaResp.Response
-	preview := response
-	if len(preview) > 20 {
-		preview = preview[:20]
-	}
-	log.Printf("[ollama] Model '%s' finished. Response length: %d chars. Preview: %q", model, len(response), preview)
-
+	response := full.String()
+	log.Printf("[ollama-stream] Model '%s' finished. Response length: %d chars.", model, len(response))
 	return response, nil
 }
 
-// CallOllamaStreaming sends a prompt and calls onToken for each chunk of text.
-// Returns the full concatenated response.
-func CallOllamaStreaming(model, prompt string, onToken func(string)) (string, error) {
-	log.Printf("[ollama-stream] Starting streaming request to model '%s'...", model)
-
-	reqData := ollamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
-	}
-
-	jsonData, err := json.Marshal(reqData)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling json: %w", err)
-	}
-
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("error sending request to ollama: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var full string
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var chunk ollamaResponse
-		if err := json.Unmarshal(line, &chunk); err != nil {
-			continue
-		}
-		if chunk.Response != "" {
-			full += chunk.Response
-			if onToken != nil {
-				onToken(chunk.Response)
-			}
-		}
-		if chunk.Done {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return full, fmt.Errorf("error reading streaming response: %w", err)
-	}
-
-	log.Printf("[ollama-stream] Model '%s' finished. Response length: %d chars.", model, len(full))
-	return full, nil
-}
-
-// CallOllamaStreamingJSON is like CallOllamaStreaming but forces JSON output
-// via Ollama's format parameter, which constrains token sampling to valid JSON.
-func CallOllamaStreamingJSON(model, prompt string, onToken func(string)) (string, error) {
-	log.Printf("[ollama-stream-json] Starting JSON streaming request to model '%s'...", model)
-
-	reqData := ollamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
-		Format: "json",
-	}
-
-	jsonData, err := json.Marshal(reqData)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling json: %w", err)
-	}
-
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("error sending request to ollama: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var full string
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var chunk ollamaResponse
-		if err := json.Unmarshal(line, &chunk); err != nil {
-			continue
-		}
-		if chunk.Response != "" {
-			full += chunk.Response
-			if onToken != nil {
-				onToken(chunk.Response)
-			}
-		}
-		if chunk.Done {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return full, fmt.Errorf("error reading streaming response: %w", err)
-	}
-
-	log.Printf("[ollama-stream-json] Model '%s' finished. Response length: %d chars.", model, len(full))
-	return full, nil
-}
-
-// GenerateArticle creates first draft (non-streaming)
-func GenerateArticle(topic string) (string, error) {
+func (c *Client) GenerateArticle(ctx context.Context, topic string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(generatePrompt, topic)
-	return callOllama("llama3.1", prompt)
+	return c.callStreaming(ctx, c.TextModel, prompt, "", onToken)
 }
 
-// GenerateArticleStreaming creates first draft with token streaming
-func GenerateArticleStreaming(topic string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(generatePrompt, topic)
-	return CallOllamaStreaming("llama3.1", prompt, onToken)
+func (c *Client) ReviseArticle(ctx context.Context, topic, article, revisionPlan string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf(revisePrompt, topic, article, revisionPlan)
+	return c.callStreaming(ctx, c.TextModel, prompt, "", onToken)
 }
 
-// ReviseArticleStreaming revises draft based on fact-check findings
-func ReviseArticleStreaming(topic, article, factcheck string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(revisePrompt, topic, article, factcheck)
-	return CallOllamaStreaming("llama3.1", prompt, onToken)
-}
-
-// CategorizeArticleStreaming generates categories for an article
-func CategorizeArticleStreaming(article string, onToken func(string)) (string, error) {
+func (c *Client) CategorizeArticle(ctx context.Context, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(categorizePrompt, article)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }
 
-// FactCheckStreaming analyzes article for potential inaccuracies
-func FactCheckStreaming(article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(factcheckPrompt, article)
-	return CallOllamaStreaming("llama3.1", prompt, onToken)
-}
-
-// ReferencesStreaming generates a reference list for the article
-func ReferencesStreaming(article string, onToken func(string)) (string, error) {
+func (c *Client) References(ctx context.Context, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(referencesPrompt, article)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }
 
-// InfoboxStreaming generates a Wikipedia-style infobox table
-func InfoboxStreaming(topic, article string, onToken func(string)) (string, error) {
+func (c *Client) Infobox(ctx context.Context, topic, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(infoboxPrompt, topic, article)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }
 
-// SeeAlsoStreaming generates related topic suggestions
-func SeeAlsoStreaming(article string, onToken func(string)) (string, error) {
+func (c *Client) SeeAlso(ctx context.Context, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(seealsoPrompt, article)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }
 
-// EvaluateArticleStreaming scores an article on quality dimensions
-func EvaluateArticleStreaming(article string, onToken func(string)) (string, error) {
+func (c *Client) EvaluateArticle(ctx context.Context, article string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(evaluatePrompt, article)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }
 
-// PlanRevisionStreaming creates targeted revision instructions from an evaluation
-func PlanRevisionStreaming(article, evaluation string, onToken func(string)) (string, error) {
+func (c *Client) PlanRevision(ctx context.Context, article, evaluation string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf(revisionPlanPrompt, article, evaluation)
-	return CallOllamaStreamingJSON("mistral", prompt, onToken)
+	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
 }

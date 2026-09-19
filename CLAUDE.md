@@ -18,7 +18,7 @@ This starts Ollama, pulls required models (`llama3.1` and `mistral`), and runs t
 go run ./cmd/server
 ```
 
-There are no tests, linting, or CI configured.
+Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests use injected AI fakes and do not require Ollama.
 
 ## Tech Stack
 
@@ -45,18 +45,23 @@ All responses stream tokens via SSE. The frontend shows a round timeline with pe
 
 ### Backend Structure (`internal/`)
 
-- **`ai/`**: Ollama API client with streaming support. Contains embedded prompt templates (`//go:embed`). Core streaming functions: `CallOllamaStreaming` (free text), `CallOllamaStreamingJSON` (JSON-constrained). Nine agent functions map to two models.
-- **`orchestrator/`**: Manages `ArticleState` with `Rounds` history and coordinates the cybernetic loop. Key types: `Evaluation` (5 scores + critical issues), `Round` (article snapshot + evaluation + revision plan). Metadata agents run concurrently via `sync.WaitGroup` + channels.
-- **`handlers/`**: Single `POST /api/start` endpoint. `safeSender` provides thread-safe SSE writes. SSE events: `article_token`, `evaluation_token`, `revision_plan_token`, `round_complete`, `converged`, `article_done`, `done`.
+- **`ai/`**: Configurable, context-aware Ollama client with one shared newline-delimited JSON streaming implementation. `OLLAMA_API_URL`, model names, and request timeout are environment-configurable.
+- **`orchestrator/`**: Coordinates the cybernetic loop through the injectable `Agent` interface. `ArticleState` records status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
+- **`handlers/`**: `Handler` owns the injected agent and exposes `POST /api/start`. `safeSender` serializes concurrent SSE writes and cancels the request when the client disconnects. The final `done` event contains structured state rather than a double-encoded JSON string.
 
 ### Frontend (`web/static/`)
 
-Single-page app with Wikipedia-inspired styling. `script.js` manages article state client-side, handles SSE streaming, renders JSON metadata into HTML components, displays a round timeline with color-coded quality scores (green/yellow/red), and shows a convergence badge.
+Single-page app with Wikipedia-inspired styling. `script.js` manages article state client-side, handles SSE streaming, sanitizes rendered Markdown, displays a round timeline with color-coded quality scores, shows explicit termination and warning states, supports canceling generation, and provides local article/draft review editing.
 
 ### Key Patterns
 
 - **Two-model strategy**: `llama3.1` for prose generation/revision; `mistral` with Ollama's `format: "json"` for structured data (evaluation, revision plans, metadata)
 - **Token-level streaming**: Each AI call takes a callback invoked per token, enabling real-time SSE pushes via `http.Flusher`
+- **Cancellation propagation**: Browser aborts and disconnected SSE clients cancel the request context passed through the handler, orchestrator, and Ollama client.
 - **Autonomous convergence**: The loop self-terminates based on quality scores — no manual intervention required
 - **Parallel metadata agents**: 4 metadata agents run as goroutines with WaitGroup synchronization after the loop completes
-- **Stateless server**: No database or persistence — `ArticleState` (including full round history) is returned to the client
+- **Stateless server**: No database or persistence — `ArticleState` (including full round history) is returned to the client. Browser edits are local only.
+
+### Current limitations
+
+References are currently model-generated candidates and are not retrieved or verified. Do not present them as proof of a claim. Evidence retrieval and applying verified sources are planned separately.

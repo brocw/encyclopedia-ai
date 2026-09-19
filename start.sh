@@ -1,14 +1,24 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo "Starting Ollama service..."
 # export HSA_OVERRIDE_GTX_VERSION="12.0.1"
-export ROCR_VISIBLE_DEVICES=1
-export HIP_VISIBLE_DEVICES=1
+export ROCR_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-1}"
+export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-1}"
 ollama serve &
 OLLAMA_PID=$!
+
+cleanup() {
+    if kill -0 "$OLLAMA_PID" 2>/dev/null; then
+        kill "$OLLAMA_PID" 2>/dev/null || true
+        wait "$OLLAMA_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
 
 # Wait for Ollama to be ready
 echo "Waiting for Ollama to be ready..."
@@ -24,6 +34,3 @@ ollama pull mistral
 
 echo "Starting Encyclopedia-AI server..."
 go run ./cmd/server
-
-# Clean up Ollama when the Go server exits
-kill $OLLAMA_PID 2>/dev/null

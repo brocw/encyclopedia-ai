@@ -13,12 +13,51 @@ const categoriesEl = document.getElementById('articleCategories');
 const roundTimelineEl = document.getElementById('roundTimeline');
 const convergenceBadge = document.getElementById('convergenceBadge');
 const roundCounter = document.getElementById('roundCounter');
+const cancelButton = document.getElementById('cancelButton');
+const generationNotice = document.getElementById('generationNotice');
+const editArticleButton = document.getElementById('editArticleButton');
+const articleEditor = document.getElementById('articleEditor');
+const articleTextarea = document.getElementById('articleTextarea');
+const applyEditButton = document.getElementById('applyEditButton');
+const cancelEditButton = document.getElementById('cancelEditButton');
 
 // State
 let articleState = null;
+let activeRequestController = null;
 
 // --- Event Listeners ---
 startButton.addEventListener('click', handleStart);
+cancelButton.addEventListener('click', () => {
+    if (activeRequestController) activeRequestController.abort();
+});
+editArticleButton.addEventListener('click', () => {
+    if (articleState) openArticleEditor(articleState.current_article);
+});
+applyEditButton.addEventListener('click', applyArticleEdit);
+cancelEditButton.addEventListener('click', closeArticleEditor);
+
+document.addEventListener('click', (event) => {
+    const relatedTopic = event.target.closest('[data-topic]');
+    if (relatedTopic) {
+        event.preventDefault();
+        topicInput.value = relatedTopic.dataset.topic;
+        handleStart();
+        return;
+    }
+
+    const editLink = event.target.closest('[data-edit-article]');
+    if (editLink) {
+        event.preventDefault();
+        if (articleState) openArticleEditor(articleState.current_article);
+        return;
+    }
+
+    const draftButton = event.target.closest('[data-draft-round]');
+    if (draftButton && articleState?.rounds) {
+        const round = articleState.rounds.find(r => String(r.number) === draftButton.dataset.draftRound);
+        if (round) openArticleEditor(round.article);
+    }
+});
 
 // --- JSON Renderers ---
 
@@ -51,7 +90,8 @@ function renderSeeAlsoJSON(jsonStr) {
     const data = JSON.parse(jsonStr);
     let html = '<ul>';
     for (const topic of data.topics) {
-        html += `<li>${escapeHTML(topic)}</li>`;
+        const safeTopic = escapeHTML(topic);
+        html += `<li><a href="#" data-topic="${safeTopic}">${safeTopic}</a></li>`;
     }
     html += '</ul>';
     return html;
@@ -64,8 +104,45 @@ function renderCategoriesJSON(jsonStr) {
 
 function escapeHTML(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = String(str ?? '');
     return div.innerHTML;
+}
+
+// Markdown is model-generated input. Sanitize the rendered HTML before it is
+// inserted into the page. DOMPurify is loaded in index.html; the fallback also
+// removes the common executable elements and URL-based injection vectors.
+function renderMarkdown(markdown) {
+    const source = String(markdown ?? '');
+    if (typeof marked === 'undefined') {
+        return `<pre>${escapeHTML(source)}</pre>`;
+    }
+
+    const rendered = marked.parse(source);
+    if (typeof DOMPurify !== 'undefined') {
+        return DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } });
+    }
+    return sanitizeHTMLFallback(rendered);
+}
+
+function sanitizeHTMLFallback(html) {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    template.content.querySelectorAll('script,style,iframe,object,embed,form,svg,math,base').forEach(el => el.remove());
+    template.content.querySelectorAll('*').forEach(el => {
+        [...el.attributes].forEach(attribute => {
+            const name = attribute.name.toLowerCase();
+            const value = attribute.value.trim().toLowerCase();
+            if (name.startsWith('on') || name === 'style') {
+                el.removeAttribute(attribute.name);
+            } else if (name === 'href' || name === 'src' || name === 'xlink:href') {
+                const safe = value.startsWith('#') || value.startsWith('/') ||
+                    value.startsWith('https://') || value.startsWith('http://') ||
+                    value.startsWith('mailto:');
+                if (!safe) el.removeAttribute(attribute.name);
+            }
+        });
+    });
+    return template.innerHTML;
 }
 
 // --- Score color helper ---
@@ -92,6 +169,21 @@ function resetPhases() {
     ['phase-generate', 'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata']
         .forEach(id => setPhaseStatus(id, 'pending'));
     roundCounter.textContent = '';
+}
+
+function finishPhaseStatuses(state) {
+    ['phase-generate', 'phase-evaluate', 'phase-plan', 'phase-revise', 'phase-metadata']
+        .forEach(id => setPhaseStatus(id, 'done'));
+
+    if (state.status === 'partial') {
+        const warning = state.warnings?.join(' ') || 'The article completed with warnings.';
+        showGenerationNotice(warning, 'warning');
+    }
+}
+
+function showGenerationNotice(message, type) {
+    generationNotice.textContent = message;
+    generationNotice.className = `generation-notice ${type}`;
 }
 
 // --- Functions ---
@@ -142,10 +234,13 @@ async function streamSSE(response, callbacks) {
                 } else if (currentEvent === 'article_done') {
                     setPhaseStatus('phase-metadata', 'active');
                 } else if (currentEvent === 'done') {
-                    result = JSON.parse(JSON.parse(raw));
-                    setPhaseStatus('phase-metadata', 'done');
+                    result = JSON.parse(raw);
+                    if (callbacks.onDone) callbacks.onDone(result);
                 } else if (currentEvent === 'error') {
-                    throw new Error(JSON.parse(raw));
+                    const payload = JSON.parse(raw);
+                    const error = new Error(payload.message || 'Article generation failed.');
+                    error.state = payload.state;
+                    throw error;
                 }
                 currentEvent = '';
             }
@@ -165,8 +260,11 @@ async function handleStart() {
         return;
     }
 
-    const maxRounds = parseInt(maxRoundsInput.value) || 3;
+    const maxRounds = Math.min(10, Math.max(1, parseInt(maxRoundsInput.value) || 3));
 
+    if (activeRequestController) activeRequestController.abort();
+    activeRequestController = new AbortController();
+    articleState = null;
     setLoading(true);
     resetPhases();
     setPhaseStatus('phase-generate', 'active');
@@ -175,18 +273,14 @@ async function handleStart() {
     clearContent();
 
     let articleText = '';
-    let currentRound = 0;
     let articleIsRevision = false;
-    let referencesText = '';
-    let infoboxText = '';
-    let seeAlsoText = '';
-    let categoryText = '';
 
     try {
         const response = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ topic, max_rounds: maxRounds }),
+            signal: activeRequestController.signal,
         });
 
         if (!response.ok) {
@@ -203,7 +297,7 @@ async function handleStart() {
                     setPhaseStatus('phase-revise', 'active');
                 }
                 articleText += token;
-                articleEl.innerHTML = marked.parse(articleText);
+                articleEl.innerHTML = renderMarkdown(articleText);
                 debouncedTOCUpdate();
             },
             onEvaluationToken(token) {
@@ -215,8 +309,7 @@ async function handleStart() {
                 setPhaseStatus('phase-plan', 'active');
             },
             onRoundComplete(round) {
-                currentRound = round.number;
-                roundCounter.textContent = `Round ${currentRound} complete (score: ${round.evaluation.overall.toFixed(1)})`;
+                roundCounter.textContent = `Round ${round.number} complete (score: ${round.evaluation.overall.toFixed(1)})`;
                 addRoundToTimeline(round);
 
                 // Prepare for next revision
@@ -229,27 +322,34 @@ async function handleStart() {
                 convergenceBadge.className = 'convergence-badge converged';
             },
             onReferencesToken(token) {
-                referencesText += token;
                 document.getElementById('references-section').classList.remove('hidden');
             },
             onInfoboxToken(token) {
-                infoboxText += token;
                 infoboxEl.classList.remove('hidden');
             },
             onSeeAlsoToken(token) {
-                seeAlsoText += token;
                 document.getElementById('seealso-section').classList.remove('hidden');
             },
-            onCategoryToken(token) {
-                categoryText += token;
+            onCategoryToken() {},
+            onDone(state) {
+                finishPhaseStatuses(state);
             },
         });
 
         render();
 
     } catch (error) {
-        alert(`Failed to generate article: ${error.message}`);
+        if (error.state) {
+            articleState = error.state;
+            render();
+        }
+        if (error.name === 'AbortError') {
+            showGenerationNotice('Generation canceled.', 'warning');
+        } else {
+            showGenerationNotice(`Generation failed: ${error.message}`, 'error');
+        }
     } finally {
+        activeRequestController = null;
         setLoading(false);
     }
 }
@@ -287,6 +387,7 @@ function addRoundToTimeline(round) {
             <span class="${scoreColor(scores.structure)}">Structure: ${scores.structure}</span>
         </div>
         ${issuesHTML}
+        <button class="draft-button secondary-button" type="button" data-draft-round="${round.number}">Review draft</button>
     `;
 
     roundTimelineEl.appendChild(el);
@@ -308,6 +409,10 @@ function clearContent() {
     document.getElementById('round-timeline').classList.add('hidden');
     convergenceBadge.className = 'convergence-badge hidden';
     convergenceBadge.textContent = '';
+    generationNotice.className = 'generation-notice hidden';
+    generationNotice.textContent = '';
+    closeArticleEditor();
+    categoriesEl.textContent = 'AI Generated Article';
 }
 
 /**
@@ -317,13 +422,13 @@ function render() {
     if (!articleState) return;
 
     topicEl.textContent = articleState.topic;
-    articleEl.innerHTML = marked.parse(articleState.current_article);
+    articleEl.innerHTML = renderMarkdown(articleState.current_article);
 
     if (articleState.infobox) {
         try {
             infoboxEl.innerHTML = renderInfoboxJSON(articleState.infobox);
         } catch {
-            infoboxEl.innerHTML = marked.parse(articleState.infobox);
+            infoboxEl.innerHTML = renderMarkdown(articleState.infobox);
         }
         infoboxEl.classList.remove('hidden');
     }
@@ -332,7 +437,7 @@ function render() {
         try {
             seeAlsoEl.innerHTML = renderSeeAlsoJSON(articleState.see_also);
         } catch {
-            seeAlsoEl.innerHTML = marked.parse(articleState.see_also);
+            seeAlsoEl.innerHTML = renderMarkdown(articleState.see_also);
         }
         document.getElementById('seealso-section').classList.remove('hidden');
     }
@@ -341,7 +446,7 @@ function render() {
         try {
             referencesEl.innerHTML = renderReferencesJSON(articleState.references);
         } catch {
-            referencesEl.innerHTML = marked.parse(articleState.references);
+            referencesEl.innerHTML = renderMarkdown(articleState.references);
         }
         document.getElementById('references-section').classList.remove('hidden');
     }
@@ -367,9 +472,19 @@ function render() {
     if (articleState.converged) {
         convergenceBadge.textContent = 'Converged';
         convergenceBadge.className = 'convergence-badge converged';
-    } else if (articleState.rounds && articleState.rounds.length > 0) {
-        convergenceBadge.textContent = 'Max rounds reached';
+    } else if (articleState.termination_reason === 'stagnated') {
+        convergenceBadge.textContent = 'Stopped: no meaningful improvement';
         convergenceBadge.className = 'convergence-badge not-converged';
+    } else if (articleState.termination_reason === 'max_rounds') {
+        convergenceBadge.textContent = 'Maximum rounds reached';
+        convergenceBadge.className = 'convergence-badge not-converged';
+    } else if (articleState.termination_reason === 'human_edit') {
+        convergenceBadge.textContent = 'Locally edited';
+        convergenceBadge.className = 'convergence-badge not-converged';
+    }
+
+    if (articleState.status === 'partial' && articleState.warnings?.length) {
+        showGenerationNotice(articleState.warnings.join(' '), 'warning');
     }
 
     mainContent.classList.remove('hidden');
@@ -385,10 +500,38 @@ function setLoading(isLoading) {
     if (isLoading) {
         loadingIndicator.classList.remove('hidden');
         startButton.disabled = true;
+        cancelButton.classList.remove('hidden');
     } else {
         loadingIndicator.classList.add('hidden');
         startButton.disabled = false;
+        cancelButton.classList.add('hidden');
     }
+}
+
+function openArticleEditor(article) {
+    articleTextarea.value = article || '';
+    articleEditor.classList.remove('hidden');
+    articleTextarea.focus();
+}
+
+function closeArticleEditor() {
+    articleEditor.classList.add('hidden');
+}
+
+function applyArticleEdit() {
+    if (!articleState) return;
+    const article = articleTextarea.value.trim();
+    if (!article) {
+        showGenerationNotice('The article cannot be empty.', 'error');
+        return;
+    }
+    articleState.current_article = article;
+    articleState.status = 'partial';
+    articleState.termination_reason = 'human_edit';
+    articleState.converged = false;
+    closeArticleEditor();
+    render();
+    showGenerationNotice('Local edit applied. It is not saved on the server.', 'warning');
 }
 
 // --- Table of Contents ---
@@ -420,7 +563,7 @@ function addEditSectionLinks() {
         if (!heading.querySelector('.edit-section')) {
             const span = document.createElement('span');
             span.className = 'edit-section';
-            span.innerHTML = '[<a href="#" onclick="return false;">edit</a>]';
+            span.innerHTML = '[<a href="#" data-edit-article="true">edit</a>]';
             heading.appendChild(span);
         }
     });

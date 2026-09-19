@@ -1,12 +1,26 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
-	"encyclopedia-ai/internal/ai"
+	"fmt"
 	"log"
-	"math"
+	"strings"
 	"sync"
 )
+
+// Agent is the AI boundary used by the loop. The production implementation is
+// ai.Client; tests can provide a deterministic fake without starting Ollama.
+type Agent interface {
+	GenerateArticle(context.Context, string, func(string)) (string, error)
+	EvaluateArticle(context.Context, string, func(string)) (string, error)
+	PlanRevision(context.Context, string, string, func(string)) (string, error)
+	ReviseArticle(context.Context, string, string, string, func(string)) (string, error)
+	References(context.Context, string, func(string)) (string, error)
+	Infobox(context.Context, string, string, func(string)) (string, error)
+	SeeAlso(context.Context, string, func(string)) (string, error)
+	CategorizeArticle(context.Context, string, func(string)) (string, error)
+}
 
 type Scores struct {
 	FactualAccuracy int `json:"factual_accuracy"`
@@ -29,15 +43,30 @@ type Round struct {
 	RevisionPlan string     `json:"revision_plan,omitempty"`
 }
 
+const (
+	StatusComplete = "complete"
+	StatusPartial  = "partial"
+	StatusFailed   = "failed"
+
+	TerminationConverged = "converged"
+	TerminationStagnated = "stagnated"
+	TerminationMaxRounds = "max_rounds"
+	TerminationError     = "error"
+)
+
 type ArticleState struct {
-	Topic          string  `json:"topic"`
-	CurrentArticle string  `json:"current_article"`
-	References     string  `json:"references"`
-	Infobox        string  `json:"infobox"`
-	SeeAlso        string  `json:"see_also"`
-	Categories     string  `json:"categories"`
-	Rounds         []Round `json:"rounds"`
-	Converged      bool    `json:"converged"`
+	Topic             string   `json:"topic"`
+	CurrentArticle    string   `json:"current_article"`
+	References        string   `json:"references"`
+	Infobox           string   `json:"infobox"`
+	SeeAlso           string   `json:"see_also"`
+	Categories        string   `json:"categories"`
+	Rounds            []Round  `json:"rounds"`
+	Converged         bool     `json:"converged"`
+	Status            string   `json:"status"`
+	TerminationReason string   `json:"termination_reason"`
+	Error             string   `json:"error,omitempty"`
+	Warnings          []string `json:"warnings,omitempty"`
 }
 
 // MetadataCallbacks holds token callbacks for the metadata agents that run after the loop.
@@ -69,29 +98,152 @@ const (
 	stagnationEpsilon = 0.3
 )
 
-// hasConverged returns true if the evaluation meets the quality threshold
-// and there are no critical issues.
+// hasConverged returns true if the evaluation meets the quality threshold and
+// contains no critical issues.
 func hasConverged(eval Evaluation) bool {
 	return eval.Overall >= qualityThreshold && len(eval.CriticalIssues) == 0
 }
 
-// isStagnant returns true if the current overall score has not improved
-// meaningfully compared to the previous round.
+// isStagnant returns true when the current score is not meaningfully better
+// than the previous score. A decline is stagnation too: continuing to revise a
+// worsening article is not useful without a different intervention.
 func isStagnant(current, previous Evaluation) bool {
-	return math.Abs(current.Overall-previous.Overall) < stagnationEpsilon
+	return current.Overall <= previous.Overall+stagnationEpsilon
 }
 
-// parseEvaluation unmarshals the JSON evaluation string into an Evaluation struct.
+func isBetterEvaluation(candidate, best Evaluation) bool {
+	if hasConverged(candidate) != hasConverged(best) {
+		return hasConverged(candidate)
+	}
+	if candidate.Overall != best.Overall {
+		return candidate.Overall > best.Overall
+	}
+	return len(candidate.CriticalIssues) < len(best.CriticalIssues)
+}
+
+func averageScores(scores Scores) float64 {
+	return float64(scores.FactualAccuracy+scores.Completeness+scores.Neutrality+scores.Clarity+scores.Structure) / 5
+}
+
+func validateScores(scores Scores) error {
+	values := []int{
+		scores.FactualAccuracy,
+		scores.Completeness,
+		scores.Neutrality,
+		scores.Clarity,
+		scores.Structure,
+	}
+	for _, value := range values {
+		if value < 1 || value > 10 {
+			return fmt.Errorf("evaluation score %d is outside the allowed range 1-10", value)
+		}
+	}
+	return nil
+}
+
+// parseEvaluation validates the model output and derives overall from the
+// component scores. The model's redundant overall field is deliberately not
+// trusted.
 func parseEvaluation(raw string) (Evaluation, error) {
 	var eval Evaluation
 	if err := json.Unmarshal([]byte(raw), &eval); err != nil {
+		return eval, fmt.Errorf("decode evaluation JSON: %w", err)
+	}
+	if err := validateScores(eval.Scores); err != nil {
 		return eval, err
 	}
+
+	issues := eval.CriticalIssues[:0]
+	for _, issue := range eval.CriticalIssues {
+		if trimmed := strings.TrimSpace(issue); trimmed != "" {
+			issues = append(issues, trimmed)
+		}
+	}
+	eval.CriticalIssues = issues
+	eval.Overall = averageScores(eval.Scores)
 	return eval, nil
 }
 
-// runMetadataAgents launches the 4 metadata agents in parallel after the loop completes.
-func runMetadataAgents(topic, article string, cb MetadataCallbacks) (references, infobox, seeAlso, categories string, errs []error) {
+func metadataError(name, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s agent returned an empty response", name)
+	}
+	if !json.Valid([]byte(value)) {
+		return fmt.Errorf("%s agent returned invalid JSON", name)
+	}
+	switch name {
+	case "references":
+		var payload struct {
+			References []struct {
+				Author    string `json:"author"`
+				Title     string `json:"title"`
+				Publisher string `json:"publisher"`
+				Year      string `json:"year"`
+			} `json:"references"`
+		}
+		if err := json.Unmarshal([]byte(value), &payload); err != nil {
+			return fmt.Errorf("references agent returned invalid shape: %w", err)
+		}
+		if payload.References == nil {
+			return fmt.Errorf("references agent response is missing references")
+		}
+	case "infobox":
+		var payload struct {
+			Rows []struct {
+				Field string `json:"field"`
+				Value string `json:"value"`
+			} `json:"rows"`
+		}
+		if err := json.Unmarshal([]byte(value), &payload); err != nil {
+			return fmt.Errorf("infobox agent returned invalid shape: %w", err)
+		}
+		if payload.Rows == nil {
+			return fmt.Errorf("infobox agent response is missing rows")
+		}
+	case "see-also":
+		var payload struct {
+			Topics []string `json:"topics"`
+		}
+		if err := json.Unmarshal([]byte(value), &payload); err != nil {
+			return fmt.Errorf("see-also agent returned invalid shape: %w", err)
+		}
+		if payload.Topics == nil {
+			return fmt.Errorf("see-also agent response is missing topics")
+		}
+	case "categories":
+		var payload struct {
+			Categories []string `json:"categories"`
+		}
+		if err := json.Unmarshal([]byte(value), &payload); err != nil {
+			return fmt.Errorf("categories agent returned invalid shape: %w", err)
+		}
+		if payload.Categories == nil {
+			return fmt.Errorf("categories agent response is missing categories")
+		}
+	}
+	return nil
+}
+
+func validateRevisionPlan(raw string) error {
+	var plan struct {
+		Instructions []string `json:"instructions"`
+	}
+	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+		return fmt.Errorf("decode revision plan JSON: %w", err)
+	}
+	if len(plan.Instructions) == 0 || len(plan.Instructions) > 5 {
+		return fmt.Errorf("revision plan must contain 1 to 5 instructions")
+	}
+	for _, instruction := range plan.Instructions {
+		if strings.TrimSpace(instruction) == "" {
+			return fmt.Errorf("revision plan contains an empty instruction")
+		}
+	}
+	return nil
+}
+
+// runMetadataAgents launches the four metadata agents in parallel after the loop completes.
+func runMetadataAgents(ctx context.Context, agent Agent, topic, article string, cb MetadataCallbacks) (references, infobox, seeAlso, categories string, errs []error) {
 	results := make(chan agentResult, 4)
 	var wg sync.WaitGroup
 
@@ -99,103 +251,157 @@ func runMetadataAgents(topic, article string, cb MetadataCallbacks) (references,
 
 	go func() {
 		defer wg.Done()
-		val, err := ai.ReferencesStreaming(article, cb.OnReferencesToken)
+		val, err := agent.References(ctx, article, cb.OnReferencesToken)
+		if err == nil {
+			err = metadataError("references", val)
+		}
 		results <- agentResult{"references", val, err}
 	}()
 
 	go func() {
 		defer wg.Done()
-		val, err := ai.InfoboxStreaming(topic, article, cb.OnInfoboxToken)
+		val, err := agent.Infobox(ctx, topic, article, cb.OnInfoboxToken)
+		if err == nil {
+			err = metadataError("infobox", val)
+		}
 		results <- agentResult{"infobox", val, err}
 	}()
 
 	go func() {
 		defer wg.Done()
-		val, err := ai.SeeAlsoStreaming(article, cb.OnSeeAlsoToken)
+		val, err := agent.SeeAlso(ctx, article, cb.OnSeeAlsoToken)
+		if err == nil {
+			err = metadataError("see-also", val)
+		}
 		results <- agentResult{"seealso", val, err}
 	}()
 
 	go func() {
 		defer wg.Done()
-		val, err := ai.CategorizeArticleStreaming(article, cb.OnCategoryToken)
+		val, err := agent.CategorizeArticle(ctx, article, cb.OnCategoryToken)
+		if err == nil {
+			err = metadataError("categories", val)
+		}
 		results <- agentResult{"categories", val, err}
 	}()
 
 	wg.Wait()
 	close(results)
 
-	for r := range results {
-		if r.err != nil {
-			log.Printf("Error from %s agent: %v", r.name, r.err)
-			errs = append(errs, r.err)
+	for result := range results {
+		if result.err != nil {
+			log.Printf("Error from %s agent: %v", result.name, result.err)
+			errs = append(errs, fmt.Errorf("%s: %w", result.name, result.err))
+			result.value = ""
 		}
-		switch r.name {
+		switch result.name {
 		case "references":
-			references = r.value
+			references = result.value
 		case "infobox":
-			infobox = r.value
+			infobox = result.value
 		case "seealso":
-			seeAlso = r.value
+			seeAlso = result.value
 		case "categories":
-			categories = r.value
+			categories = result.value
 		}
 	}
 
 	return
 }
 
-// RunArticleLoop executes the full cybernetic feedback loop:
-//
-//	Generate → [Evaluate → Compare → Plan → Revise]* → Metadata agents
-//
-// The loop runs for at most maxRounds revision cycles, stopping early if
-// the article converges (meets quality threshold) or scores stagnate.
-func RunArticleLoop(topic string, maxRounds int, cb LoopCallbacks) (*ArticleState, error) {
-	// --- Actuator: generate initial article ---
-	article, err := ai.GenerateArticleStreaming(topic, cb.OnArticleToken)
+func failureState(topic, article string, rounds []Round, reason string, err error) *ArticleState {
+	state := &ArticleState{
+		Topic:             topic,
+		CurrentArticle:    article,
+		Rounds:            rounds,
+		Status:            StatusPartial,
+		TerminationReason: reason,
+	}
+	if article == "" {
+		state.Status = StatusFailed
+	}
 	if err != nil {
-		return nil, err
+		state.Error = err.Error()
+	}
+	return state
+}
+
+// RunArticleLoop executes Generate → [Evaluate → Compare → Plan → Revise]* → Metadata.
+// maxRounds is the maximum number of evaluated rounds. The last round is never
+// revised without a subsequent evaluation.
+func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agent, cb LoopCallbacks) (*ArticleState, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if agent == nil {
+		return failureState(topic, "", nil, TerminationError, fmt.Errorf("AI agent is not configured")), fmt.Errorf("AI agent is not configured")
+	}
+	if maxRounds <= 0 {
+		return failureState(topic, "", nil, TerminationError, fmt.Errorf("max rounds must be greater than zero")), fmt.Errorf("max rounds must be greater than zero")
+	}
+
+	article, err := agent.GenerateArticle(ctx, topic, cb.OnArticleToken)
+	if err != nil {
+		wrapped := fmt.Errorf("generate article: %w", err)
+		return failureState(topic, article, nil, TerminationError, wrapped), wrapped
 	}
 	log.Printf("Finished generating article '%s'", topic)
 
-	rounds := []Round{}
+	rounds := make([]Round, 0, maxRounds)
 	converged := false
+	terminationReason := TerminationMaxRounds
+	bestArticle := article
+	var bestEvaluation Evaluation
+	hasBestEvaluation := false
 
-	for i := 1; i <= maxRounds; i++ {
-		log.Printf("Starting evaluation round %d for '%s'", i, topic)
+	for roundNumber := 1; roundNumber <= maxRounds; roundNumber++ {
+		log.Printf("Starting evaluation round %d for '%s'", roundNumber, topic)
 
-		// --- Sensor: evaluate current article ---
-		evalRaw, err := ai.EvaluateArticleStreaming(article, cb.OnEvaluationToken)
+		evaluationRaw, err := agent.EvaluateArticle(ctx, article, cb.OnEvaluationToken)
 		if err != nil {
-			log.Printf("Error evaluating article round %d: %v", i, err)
-			break
+			wrapped := fmt.Errorf("evaluate article round %d: %w", roundNumber, err)
+			log.Printf("%v", wrapped)
+			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
 
-		eval, err := parseEvaluation(evalRaw)
+		evaluation, err := parseEvaluation(evaluationRaw)
 		if err != nil {
-			log.Printf("Error parsing evaluation round %d: %v", i, err)
-			break
+			wrapped := fmt.Errorf("parse evaluation round %d: %w", roundNumber, err)
+			log.Printf("%v", wrapped)
+			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+		}
+		if !hasBestEvaluation || isBetterEvaluation(evaluation, bestEvaluation) {
+			bestArticle = article
+			bestEvaluation = evaluation
+			hasBestEvaluation = true
 		}
 
-		round := Round{
-			Number:     i,
-			Article:    article,
-			Evaluation: eval,
-		}
+		round := Round{Number: roundNumber, Article: article, Evaluation: evaluation}
 
-		// --- Comparator: check convergence ---
-		if hasConverged(eval) {
-			log.Printf("Article '%s' converged at round %d (overall: %.1f)", topic, i, eval.Overall)
+		if hasConverged(evaluation) {
 			rounds = append(rounds, round)
 			if cb.OnRoundComplete != nil {
 				cb.OnRoundComplete(round)
 			}
 			converged = true
+			terminationReason = TerminationConverged
+			log.Printf("Article '%s' converged at round %d (overall: %.1f)", topic, roundNumber, evaluation.Overall)
 			break
 		}
 
-		if i > 1 && isStagnant(eval, rounds[len(rounds)-1].Evaluation) {
-			log.Printf("Article '%s' stagnated at round %d (overall: %.1f)", topic, i, eval.Overall)
+		if roundNumber > 1 && isStagnant(evaluation, rounds[len(rounds)-1].Evaluation) {
+			rounds = append(rounds, round)
+			if cb.OnRoundComplete != nil {
+				cb.OnRoundComplete(round)
+			}
+			terminationReason = TerminationStagnated
+			log.Printf("Article '%s' stagnated at round %d (overall: %.1f)", topic, roundNumber, evaluation.Overall)
+			break
+		}
+
+		// Do not create an unassessed final revision. The article in the last
+		// recorded round is the article returned to the user.
+		if roundNumber == maxRounds {
 			rounds = append(rounds, round)
 			if cb.OnRoundComplete != nil {
 				cb.OnRoundComplete(round)
@@ -203,49 +409,66 @@ func RunArticleLoop(topic string, maxRounds int, cb LoopCallbacks) (*ArticleStat
 			break
 		}
 
-		// --- Controller: plan revision ---
-		planRaw, err := ai.PlanRevisionStreaming(article, evalRaw, cb.OnRevisionPlanToken)
+		plan, err := agent.PlanRevision(ctx, article, evaluationRaw, cb.OnRevisionPlanToken)
 		if err != nil {
-			log.Printf("Error planning revision round %d: %v", i, err)
+			wrapped := fmt.Errorf("plan revision round %d: %w", roundNumber, err)
+			log.Printf("%v", wrapped)
 			rounds = append(rounds, round)
-			break
+			if cb.OnRoundComplete != nil {
+				cb.OnRoundComplete(round)
+			}
+			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
-		round.RevisionPlan = planRaw
-
+		if err := validateRevisionPlan(plan); err != nil {
+			wrapped := fmt.Errorf("validate revision plan round %d: %w", roundNumber, err)
+			log.Printf("%v", wrapped)
+			rounds = append(rounds, round)
+			if cb.OnRoundComplete != nil {
+				cb.OnRoundComplete(round)
+			}
+			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
+		}
+		round.RevisionPlan = plan
 		rounds = append(rounds, round)
 		if cb.OnRoundComplete != nil {
 			cb.OnRoundComplete(round)
 		}
 
-		// --- Actuator: revise article ---
-		revised, err := ai.ReviseArticleStreaming(topic, article, planRaw, cb.OnArticleToken)
+		revised, err := agent.ReviseArticle(ctx, topic, article, plan, cb.OnArticleToken)
 		if err != nil {
-			log.Printf("Error revising article round %d: %v", i, err)
-			break
+			wrapped := fmt.Errorf("revise article round %d: %w", roundNumber, err)
+			log.Printf("%v", wrapped)
+			return failureState(topic, bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
 		article = revised
-		log.Printf("Finished revision round %d for '%s'", i, topic)
+		log.Printf("Finished revision round %d for '%s'", roundNumber, topic)
 	}
 
 	if converged && cb.OnConverged != nil {
 		cb.OnConverged()
 	}
 
-	// --- Post-loop: run metadata agents once on the final article ---
-	references, infobox, seeAlso, categories, errs := runMetadataAgents(topic, article, cb.Metadata)
-	if len(errs) > 0 {
-		log.Printf("Warning: %d metadata agent(s) had errors for '%s'", len(errs), topic)
-	}
-
+	article = bestArticle
+	references, infobox, seeAlso, categories, metadataErrs := runMetadataAgents(ctx, agent, topic, article, cb.Metadata)
 	state := &ArticleState{
-		Topic:          topic,
-		CurrentArticle: article,
-		References:     references,
-		Infobox:        infobox,
-		SeeAlso:        seeAlso,
-		Categories:     categories,
-		Rounds:         rounds,
-		Converged:      converged,
+		Topic:             topic,
+		CurrentArticle:    article,
+		References:        references,
+		Infobox:           infobox,
+		SeeAlso:           seeAlso,
+		Categories:        categories,
+		Rounds:            rounds,
+		Converged:         converged,
+		Status:            StatusComplete,
+		TerminationReason: terminationReason,
+	}
+	if len(metadataErrs) > 0 {
+		state.Status = StatusPartial
+		state.Warnings = make([]string, 0, len(metadataErrs))
+		for _, metadataErr := range metadataErrs {
+			state.Warnings = append(state.Warnings, metadataErr.Error())
+		}
+		log.Printf("Warning: %d metadata agent(s) had errors for '%s'", len(metadataErrs), topic)
 	}
 
 	return state, nil

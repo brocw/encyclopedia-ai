@@ -18,6 +18,7 @@ type fakeAgent struct {
 	evaluationAt  int
 	planErr       error
 	reviseErr     error
+	revision      string // when set, what ReviseArticle returns
 	planCalls     int
 	reviseCalls   int
 	metadataCalls int
@@ -82,7 +83,7 @@ func (f *fakeAgent) PlanRevision(context.Context, string, string, llm.Sink) (str
 	return `{"instructions":["improve the article"]}`, nil
 }
 
-func (f *fakeAgent) ReviseArticle(_ context.Context, brief, _, _ string, _ llm.Sink) (string, error) {
+func (f *fakeAgent) ReviseArticle(_ context.Context, brief, _, _ string, sink llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.reviseCalls++
 	f.briefs = append(f.briefs, brief)
@@ -90,7 +91,14 @@ func (f *fakeAgent) ReviseArticle(_ context.Context, brief, _, _ string, _ llm.S
 	if f.reviseErr != nil {
 		return "", f.reviseErr
 	}
-	return "revised article", nil
+	revision := f.revision
+	if revision == "" {
+		revision = draftedArticle + " Revised."
+	}
+	// A revision is streamed as it is written, which is what a rejection has
+	// to undo.
+	sink.Emit(llm.Delta{Content: revision})
+	return revision, nil
 }
 
 func (f *fakeAgent) References(context.Context, string, llm.Sink) (string, error) {
@@ -250,5 +258,48 @@ func TestRunArticleLoopCarriesThePlanThroughTheLoop(t *testing.T) {
 		if !strings.Contains(brief, "A subject.") {
 			t.Fatalf("an agent was given %q instead of the brief", brief)
 		}
+	}
+}
+
+// A reviser asked to rewrite a long article whole will sometimes summarize it,
+// and the evaluator rewards the result for reading well. The revision is
+// thrown away before it can be scored.
+func TestRunArticleLoopRejectsARevisionThatSummarizes(t *testing.T) {
+	fake := &fakeAgent{
+		evaluations: []string{evaluationJSON([5]int{7, 7, 7, 7, 7})},
+		revision:    "A much shorter article.",
+	}
+	state, err := RunArticleLoop(context.Background(), "topic", 3, fake, LoopCallbacks{})
+	if err != nil {
+		t.Fatalf("RunArticleLoop returned error: %v", err)
+	}
+	if state.TerminationReason != TerminationRevisionRejected {
+		t.Fatalf("termination reason = %q", state.TerminationReason)
+	}
+	if state.CurrentArticle != draftedArticle {
+		t.Fatalf("current article = %q, want the article that was kept", state.CurrentArticle)
+	}
+	if state.Status != StatusPartial || len(state.Warnings) == 0 {
+		t.Fatalf("a discarded revision was not reported: status=%q warnings=%v", state.Status, state.Warnings)
+	}
+	if _, reviseCalls, _ := fake.counts(); reviseCalls != 1 {
+		t.Fatalf("revise calls = %d, want the loop to stop after the rejection", reviseCalls)
+	}
+}
+
+// The rejected revision was streamed as it arrived, so the stream has to be
+// put back to the article that was actually kept.
+func TestRunArticleLoopRepaintsAfterRejectingARevision(t *testing.T) {
+	fake := &fakeAgent{
+		evaluations: []string{evaluationJSON([5]int{7, 7, 7, 7, 7})},
+		revision:    "A much shorter article.",
+	}
+	var painted painter
+	state, err := RunArticleLoop(context.Background(), "topic", 3, fake, LoopCallbacks{OnArticle: painted.sink()})
+	if err != nil {
+		t.Fatalf("RunArticleLoop returned error: %v", err)
+	}
+	if painted.text.String() != state.CurrentArticle {
+		t.Fatalf("painted = %q, want the kept article %q", painted.text.String(), state.CurrentArticle)
 	}
 }

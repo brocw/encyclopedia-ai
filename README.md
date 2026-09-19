@@ -176,6 +176,11 @@ client that arrives after the job finished can skip the log entirely and read
 `max_rounds` is the maximum number of evaluated rounds, not the number of
 unverified revisions. A final round is never revised without being evaluated.
 
+A revision that kept less than 75% of the article is thrown away and the loop
+stops, because the reviser summarized rather than revised. The evaluator does
+not catch this on its own — in one run it scored a revision that had dropped
+half the coverage 9.2 against the original's 8.4.
+
 ## Development
 
 Run the checks locally:

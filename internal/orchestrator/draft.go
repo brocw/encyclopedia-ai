@@ -152,11 +152,39 @@ func (w *articleWriter) Commit(text string) {
 	}
 }
 
-func (w *articleWriter) repaint() {
-	w.sink.Emit(llm.Delta{Restart: true})
-	if text := w.assembled.String(); text != "" {
-		w.sink.Emit(llm.Delta{Content: text})
+func (w *articleWriter) repaint() { repaintArticle(w.sink, w.assembled.String()) }
+
+// repaintArticle replaces whatever the article stream is showing with text.
+// The server holds the article; a client is only ever shown a copy of it.
+func repaintArticle(sink llm.Sink, text string) {
+	sink.Emit(llm.Delta{Restart: true})
+	if text != "" {
+		sink.Emit(llm.Delta{Content: text})
 	}
+}
+
+// minRevisionRetained is the fraction of an article a revision must keep.
+//
+// The reviser rewrites the article whole, and a model asked to re-emit a long
+// article with a few edits will sometimes summarize it instead: one run came
+// back at 45% of its input, having dropped half the coverage. The evaluator
+// does not catch this — it scored the shortened article 9.2 against the
+// original's 8.4, because tighter prose reads better and nothing in the rubric
+// notices that a third of the subject went missing. So the gate sits here,
+// before the evaluation that would reward the loss.
+const minRevisionRetained = 0.75
+
+// revisionIsUsable reports whether a revision is an edit of the article rather
+// than a summary of it.
+func revisionIsUsable(original, revised string) error {
+	if len(original) == 0 {
+		return nil
+	}
+	retained := float64(len(revised)) / float64(len(original))
+	if retained < minRevisionRetained {
+		return fmt.Errorf("the revision kept only %.0f%% of the article, so it summarized rather than revised it", retained*100)
+	}
+	return nil
 }
 
 // cleanProse removes the wrappings a model adds to prose it was asked to emit

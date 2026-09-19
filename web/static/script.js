@@ -776,6 +776,9 @@ function render() {
     } else if (articleState.termination_reason === 'stagnated') {
         convergenceBadge.textContent = 'Stopped: no meaningful improvement';
         convergenceBadge.className = 'convergence-badge not-converged';
+    } else if (articleState.termination_reason === 'revision_rejected') {
+        convergenceBadge.textContent = 'Stopped: a revision was discarded';
+        convergenceBadge.className = 'convergence-badge not-converged';
     } else if (articleState.termination_reason === 'max_rounds') {
         convergenceBadge.textContent = 'Maximum rounds reached';
         convergenceBadge.className = 'convergence-badge not-converged';

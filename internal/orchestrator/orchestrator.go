@@ -62,6 +62,10 @@ const (
 	TerminationStagnated = "stagnated"
 	TerminationMaxRounds = "max_rounds"
 	TerminationError     = "error"
+
+	// TerminationRevisionRejected means a revision was thrown away and the
+	// article before it was kept. See revisionIsUsable.
+	TerminationRevisionRejected = "revision_rejected"
 )
 
 type ArticleState struct {
@@ -399,6 +403,9 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 	log.Printf("Finished drafting article %q", title)
 
 	rounds := make([]Round, 0, maxRounds)
+	// warnings collects what went wrong without ending the run. The metadata
+	// agents add to it too.
+	var warnings []string
 	converged := false
 	terminationReason := TerminationMaxRounds
 	bestArticle := article
@@ -491,6 +498,16 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 			log.Printf("%v", wrapped)
 			return fail(bestArticle, rounds, TerminationError, wrapped), wrapped
 		}
+		if reason := revisionIsUsable(article, revised); reason != nil {
+			// Keep the article that was evaluated and stop: a reviser that
+			// summarizes will summarize again next round.
+			warning := fmt.Sprintf("revision round %d was rejected: %v", roundNumber, reason)
+			log.Printf("%s", warning)
+			warnings = append(warnings, warning)
+			terminationReason = TerminationRevisionRejected
+			repaintArticle(cb.OnArticle, article)
+			break
+		}
 		reviser.Commit(revised)
 		article = revised
 		log.Printf("Finished revision round %d for %q", roundNumber, title)
@@ -517,13 +534,15 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 		Status:            StatusComplete,
 		TerminationReason: terminationReason,
 	}
+	for _, metadataErr := range metadataErrs {
+		warnings = append(warnings, metadataErr.Error())
+	}
 	if len(metadataErrs) > 0 {
-		state.Status = StatusPartial
-		state.Warnings = make([]string, 0, len(metadataErrs))
-		for _, metadataErr := range metadataErrs {
-			state.Warnings = append(state.Warnings, metadataErr.Error())
-		}
 		log.Printf("Warning: %d metadata agent(s) had errors for %q", len(metadataErrs), title)
+	}
+	if len(warnings) > 0 {
+		state.Status = StatusPartial
+		state.Warnings = warnings
 	}
 
 	return state, nil

@@ -107,10 +107,15 @@ func TestPromptsCarryWhatTheNextAgentNeeds(t *testing.T) {
 		Sections:      []Section{{Heading: "Origins", Purpose: "where it came from", TargetWords: 150}},
 		OpenQuestions: []string{"is the date right?"},
 	}
-	for _, want := range []string{"Origins", "where it came from", "150", "is the date right?"} {
+	for _, want := range []string{"Origins", "where it came from", "150"} {
 		if !strings.Contains(outline.Prompt(), want) {
 			t.Errorf("outline prompt is missing %q:\n%s", want, outline.Prompt())
 		}
+	}
+	// A writer shown the planner's doubts writes about them: an early run put
+	// "current research questions include..." into the lead.
+	if strings.Contains(outline.Prompt(), "is the date right?") {
+		t.Errorf("outline prompt leaks its open questions to the writer:\n%s", outline.Prompt())
 	}
 
 	section := Section{Heading: "Origins", Purpose: "where it came from", KeyQuestions: []string{"when?"}, TargetWords: 150}

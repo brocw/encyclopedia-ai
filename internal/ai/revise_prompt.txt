@@ -2,9 +2,11 @@ Revise the encyclopedia article below by following the revision instructions exa
 
 Requirements:
 - Output ONLY the full revised article in Markdown format.
+- Reproduce the article in full. Every section, and every paragraph an instruction does not touch, must come through unchanged. The revision is an edit, not a rewrite: it should be at least as long as the original.
+- Do NOT condense, summarize, merge, or drop material that the instructions do not mention.
 - Use ## for section headers (never # or ###, except for a subheading that already exists).
 - Do NOT start with the topic name as a heading — begin the article body immediately.
-- Keep the existing section structure unless an instruction says to change it.
+- Keep every existing section and its heading unless an instruction says to change it.
 - Stay within the brief. Do not add material the brief places out of scope.
 - Do NOT write a concluding paragraph or "Conclusion" section.
 - Do NOT include a "References" or "See Also" section.

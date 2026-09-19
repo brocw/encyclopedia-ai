@@ -39,13 +39,13 @@ The system follows an Intake → Outline → Draft → [Evaluate → Compare →
 5. **Sensor**: `EvaluateArticle` (structured model, JSON) scores the article on 5 dimensions against the brief and lists critical issues
 6. **Comparator**: `hasConverged` checks if overall score >= 8.0 with no critical issues; `isStagnant` detects score plateaus between rounds
 7. **Controller**: `PlanRevision` (structured model, JSON) produces targeted revision instructions from the evaluation
-8. **Actuator**: `ReviseArticle` (text model) rewrites the article whole against the brief and the revision plan
+8. **Actuator**: `ReviseArticle` (text model) rewrites the article whole against the brief and the revision plan. `revisionIsUsable` throws away a revision that kept less than 75% of the article and stops the loop, because a reviser that summarizes will summarize again
 9. Loop repeats until convergence, stagnation, or max rounds
 10. **Metadata agents** (references, infobox, see-also, categories) run once in parallel on the final article
 
 All responses stream tokens via SSE. The frontend shows the article plan, a round timeline with per-round quality scores, a convergence badge, and the live reasoning trace when a reasoning model is configured. Progress is driven by `phase` events the pipeline emits, not inferred from which stream is producing tokens.
 
-The loop still grades itself: `factual_accuracy` is scored by a model with no access to evidence. Hardening that gate is M4.
+The loop still grades itself: `factual_accuracy` is scored by a model with no access to evidence. Hardening that gate is M4. Where a failure mode is measurable rather than a matter of judgement — a revision that summarizes — it is gated in code instead.
 
 ### Backend Structure (`internal/`)
 
@@ -62,6 +62,7 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 
 ### Key Patterns
 
+- **Gate what the evaluator will not catch**: the evaluator scored a revision that had dropped half the article's coverage 9.2 against the original's 8.4 — tighter prose reads better, and nothing in the rubric notices missing material. A check the scorer cannot be talked out of belongs *before* the score, not in the rubric.
 - **The plan is the specification**: everything that writes or judges the article is shown the brief. `completeness` means "covers what the brief put in scope"; off-topic means "outside it". An agent asked to judge an article against nothing will judge it against nothing.
 - **The server owns the article text**: `articleWriter` assembles the article and mirrors it to the `article` stream. Its copy is authoritative, so whenever the stream could drift from it — a repair retry, or a section whose answer needed cleaning — it emits `Restart` and repaints. A client never has to reconstruct what the server already knows.
 - **Repair what is repairable, fail on what is not**: `plan.ParseOutline` drops a nameless section and clamps an absurd word target, because an article is still writable. It errors on a one-section outline, because there is nothing to write.

@@ -159,7 +159,13 @@ func (b *Brief) Prompt() string {
 	return strings.TrimRight(out.String(), "\n")
 }
 
-// Prompt renders the outline for inclusion in another agent's prompt.
+// Prompt renders the outline for inclusion in a drafting agent's prompt.
+//
+// OpenQuestions is deliberately left out. It is an editorial record of what
+// the planner was unsure of, and a writer shown it either writes about it or
+// guesses at it — early runs put "current research questions include..."
+// straight into the lead. It is for the reader, and for the verification
+// agents, not for the prose.
 func (o *Outline) Prompt() string {
 	if o == nil || len(o.Sections) == 0 {
 		return "(no outline)"
@@ -173,7 +179,6 @@ func (o *Outline) Prompt() string {
 		}
 		out.WriteString("\n")
 	}
-	writeList(&out, "Open questions", o.OpenQuestions)
 	return strings.TrimRight(out.String(), "\n")
 }
 

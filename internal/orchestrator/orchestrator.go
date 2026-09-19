@@ -7,19 +7,25 @@ import (
 	"log"
 	"strings"
 	"sync"
+
+	"encyclopedia-ai/internal/llm"
 )
 
 // Agent is the AI boundary used by the loop. The production implementation is
 // ai.Client; tests can provide a deterministic fake without starting Ollama.
+//
+// Each method returns the agent's answer and streams increments to an
+// llm.Sink. The sink separates reasoning tokens from answer tokens, so a
+// model's deliberation never reaches the article text or the JSON parsers.
 type Agent interface {
-	GenerateArticle(context.Context, string, func(string)) (string, error)
-	EvaluateArticle(context.Context, string, func(string)) (string, error)
-	PlanRevision(context.Context, string, string, func(string)) (string, error)
-	ReviseArticle(context.Context, string, string, string, func(string)) (string, error)
-	References(context.Context, string, func(string)) (string, error)
-	Infobox(context.Context, string, string, func(string)) (string, error)
-	SeeAlso(context.Context, string, func(string)) (string, error)
-	CategorizeArticle(context.Context, string, func(string)) (string, error)
+	GenerateArticle(context.Context, string, llm.Sink) (string, error)
+	EvaluateArticle(context.Context, string, llm.Sink) (string, error)
+	PlanRevision(context.Context, string, string, llm.Sink) (string, error)
+	ReviseArticle(context.Context, string, string, string, llm.Sink) (string, error)
+	References(context.Context, string, llm.Sink) (string, error)
+	Infobox(context.Context, string, string, llm.Sink) (string, error)
+	SeeAlso(context.Context, string, llm.Sink) (string, error)
+	CategorizeArticle(context.Context, string, llm.Sink) (string, error)
 }
 
 type Scores struct {
@@ -69,22 +75,22 @@ type ArticleState struct {
 	Warnings          []string `json:"warnings,omitempty"`
 }
 
-// MetadataCallbacks holds token callbacks for the metadata agents that run after the loop.
+// MetadataCallbacks holds stream sinks for the metadata agents that run after the loop.
 type MetadataCallbacks struct {
-	OnReferencesToken func(string)
-	OnInfoboxToken    func(string)
-	OnSeeAlsoToken    func(string)
-	OnCategoryToken   func(string)
+	OnReferences llm.Sink
+	OnInfobox    llm.Sink
+	OnSeeAlso    llm.Sink
+	OnCategories llm.Sink
 }
 
-// LoopCallbacks holds token callbacks for each phase of the cybernetic loop.
+// LoopCallbacks holds a stream sink for each phase of the cybernetic loop.
 type LoopCallbacks struct {
-	OnArticleToken      func(string)
-	OnEvaluationToken   func(string)
-	OnRevisionPlanToken func(string)
-	OnRoundComplete     func(Round)
-	OnConverged         func()
-	Metadata            MetadataCallbacks
+	OnArticle       llm.Sink
+	OnEvaluation    llm.Sink
+	OnRevisionPlan  llm.Sink
+	OnRoundComplete func(Round)
+	OnConverged     func()
+	Metadata        MetadataCallbacks
 }
 
 type agentResult struct {
@@ -251,7 +257,7 @@ func runMetadataAgents(ctx context.Context, agent Agent, topic, article string, 
 
 	go func() {
 		defer wg.Done()
-		val, err := agent.References(ctx, article, cb.OnReferencesToken)
+		val, err := agent.References(ctx, article, cb.OnReferences)
 		if err == nil {
 			err = metadataError("references", val)
 		}
@@ -260,7 +266,7 @@ func runMetadataAgents(ctx context.Context, agent Agent, topic, article string, 
 
 	go func() {
 		defer wg.Done()
-		val, err := agent.Infobox(ctx, topic, article, cb.OnInfoboxToken)
+		val, err := agent.Infobox(ctx, topic, article, cb.OnInfobox)
 		if err == nil {
 			err = metadataError("infobox", val)
 		}
@@ -269,7 +275,7 @@ func runMetadataAgents(ctx context.Context, agent Agent, topic, article string, 
 
 	go func() {
 		defer wg.Done()
-		val, err := agent.SeeAlso(ctx, article, cb.OnSeeAlsoToken)
+		val, err := agent.SeeAlso(ctx, article, cb.OnSeeAlso)
 		if err == nil {
 			err = metadataError("see-also", val)
 		}
@@ -278,7 +284,7 @@ func runMetadataAgents(ctx context.Context, agent Agent, topic, article string, 
 
 	go func() {
 		defer wg.Done()
-		val, err := agent.CategorizeArticle(ctx, article, cb.OnCategoryToken)
+		val, err := agent.CategorizeArticle(ctx, article, cb.OnCategories)
 		if err == nil {
 			err = metadataError("categories", val)
 		}
@@ -340,7 +346,7 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 		return failureState(topic, "", nil, TerminationError, fmt.Errorf("max rounds must be greater than zero")), fmt.Errorf("max rounds must be greater than zero")
 	}
 
-	article, err := agent.GenerateArticle(ctx, topic, cb.OnArticleToken)
+	article, err := agent.GenerateArticle(ctx, topic, cb.OnArticle)
 	if err != nil {
 		wrapped := fmt.Errorf("generate article: %w", err)
 		return failureState(topic, article, nil, TerminationError, wrapped), wrapped
@@ -357,7 +363,7 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 	for roundNumber := 1; roundNumber <= maxRounds; roundNumber++ {
 		log.Printf("Starting evaluation round %d for '%s'", roundNumber, topic)
 
-		evaluationRaw, err := agent.EvaluateArticle(ctx, article, cb.OnEvaluationToken)
+		evaluationRaw, err := agent.EvaluateArticle(ctx, article, cb.OnEvaluation)
 		if err != nil {
 			wrapped := fmt.Errorf("evaluate article round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
@@ -409,7 +415,7 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 			break
 		}
 
-		plan, err := agent.PlanRevision(ctx, article, evaluationRaw, cb.OnRevisionPlanToken)
+		plan, err := agent.PlanRevision(ctx, article, evaluationRaw, cb.OnRevisionPlan)
 		if err != nil {
 			wrapped := fmt.Errorf("plan revision round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)
@@ -434,7 +440,7 @@ func RunArticleLoop(ctx context.Context, topic string, maxRounds int, agent Agen
 			cb.OnRoundComplete(round)
 		}
 
-		revised, err := agent.ReviseArticle(ctx, topic, article, plan, cb.OnArticleToken)
+		revised, err := agent.ReviseArticle(ctx, topic, article, plan, cb.OnArticle)
 		if err != nil {
 			wrapped := fmt.Errorf("revise article round %d: %w", roundNumber, err)
 			log.Printf("%v", wrapped)

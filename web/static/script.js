@@ -15,6 +15,9 @@ const convergenceBadge = document.getElementById('convergenceBadge');
 const roundCounter = document.getElementById('roundCounter');
 const cancelButton = document.getElementById('cancelButton');
 const generationNotice = document.getElementById('generationNotice');
+const reasoningPanel = document.getElementById('reasoningPanel');
+const reasoningPhaseEl = document.getElementById('reasoningPhase');
+const reasoningLog = document.getElementById('reasoningLog');
 const editArticleButton = document.getElementById('editArticleButton');
 const articleEditor = document.getElementById('articleEditor');
 const articleTextarea = document.getElementById('articleTextarea');
@@ -209,6 +212,12 @@ async function streamSSE(response, callbacks) {
         category_token: callbacks.onCategoryToken,
     };
 
+    // Every stream carries three events: <stream>_token for the answer,
+    // <stream>_reasoning for the model's deliberation, and <stream>_restart
+    // when a repair retry means the tokens so far must be discarded.
+    const streamSuffix = (event, suffix) =>
+        event.endsWith(suffix) ? event.slice(0, -suffix.length) : null;
+
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -223,8 +232,14 @@ async function streamSSE(response, callbacks) {
             } else if (line.startsWith('data: ')) {
                 const raw = line.slice(6);
                 const handler = eventMap[currentEvent];
+                const reasoningStream = streamSuffix(currentEvent, '_reasoning');
+                const restartStream = streamSuffix(currentEvent, '_restart');
                 if (handler) {
                     handler(JSON.parse(raw));
+                } else if (reasoningStream) {
+                    if (callbacks.onReasoning) callbacks.onReasoning(reasoningStream, JSON.parse(raw));
+                } else if (restartStream) {
+                    if (callbacks.onRestart) callbacks.onRestart(restartStream);
                 } else if (currentEvent === 'round_complete') {
                     if (callbacks.onRoundComplete) {
                         callbacks.onRoundComplete(JSON.parse(raw));
@@ -331,6 +346,18 @@ async function handleStart() {
                 document.getElementById('seealso-section').classList.remove('hidden');
             },
             onCategoryToken() {},
+            onReasoning(stream, token) {
+                appendReasoning(stream, token);
+            },
+            onRestart(stream) {
+                // A repair retry is answering again from the start, so
+                // whatever this stream has already painted is stale.
+                if (stream === 'article') {
+                    articleText = '';
+                    articleEl.innerHTML = '';
+                }
+                showGenerationNotice('The model returned an unusable response; retrying.', 'warning');
+            },
             onDone(state) {
                 finishPhaseStatuses(state);
             },
@@ -352,6 +379,44 @@ async function handleStart() {
         activeRequestController = null;
         setLoading(false);
     }
+}
+
+const REASONING_PHASES = {
+    article: 'drafting',
+    evaluation: 'evaluating',
+    revision_plan: 'planning the revision',
+    references: 'gathering references',
+    infobox: 'building the infobox',
+    seealso: 'finding related topics',
+    category: 'categorizing',
+};
+
+// A long reasoning trace is trimmed so the panel cannot grow without bound.
+const REASONING_LIMIT = 20000;
+
+/**
+ * Appends a reasoning token to the editor's-notes panel. The trace is written
+ * as text, never as markup, and never reaches the article body.
+ */
+function appendReasoning(stream, token) {
+    reasoningPanel.classList.remove('hidden');
+    reasoningPhaseEl.textContent = REASONING_PHASES[stream] ? ` — ${REASONING_PHASES[stream]}` : '';
+
+    let trace = reasoningLog.textContent + token;
+    if (trace.length > REASONING_LIMIT) {
+        trace = trace.slice(trace.length - REASONING_LIMIT);
+    }
+    reasoningLog.textContent = trace;
+
+    if (reasoningPanel.open) {
+        reasoningLog.scrollTop = reasoningLog.scrollHeight;
+    }
+}
+
+function clearReasoning() {
+    reasoningLog.textContent = '';
+    reasoningPhaseEl.textContent = '';
+    reasoningPanel.classList.add('hidden');
 }
 
 /**
@@ -411,6 +476,7 @@ function clearContent() {
     convergenceBadge.textContent = '';
     generationNotice.className = 'generation-notice hidden';
     generationNotice.textContent = '';
+    clearReasoning();
     closeArticleEditor();
     categoriesEl.textContent = 'AI Generated Article';
 }

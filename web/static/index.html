@@ -69,6 +69,16 @@
           <div class="loop-phase" id="phase-metadata"><span class="agent-status pending"></span> Generating metadata</div>
         </div>
         <div id="roundCounter" class="round-counter"></div>
+
+        <!-- Reasoning trace: a reasoning model's deliberation, kept separate
+             from the article text it eventually produces. -->
+        <details id="reasoningPanel" class="reasoning-panel hidden">
+          <summary class="reasoning-summary">
+            Editor's notes<span id="reasoningPhase" class="reasoning-phase"></span>
+          </summary>
+          <pre id="reasoningLog" class="reasoning-log" aria-live="polite"></pre>
+        </details>
+
         <button id="cancelButton" class="secondary-button hidden" type="button">Cancel generation</button>
       </div>
 

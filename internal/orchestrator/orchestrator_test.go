@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"encyclopedia-ai/internal/llm"
 )
 
 type fakeAgent struct {
@@ -29,11 +31,11 @@ func evaluationJSON(scores [5]int) string {
 		`},"overall":1,"critical_issues":[]}`
 }
 
-func (f *fakeAgent) GenerateArticle(context.Context, string, func(string)) (string, error) {
+func (f *fakeAgent) GenerateArticle(context.Context, string, llm.Sink) (string, error) {
 	return "initial article", nil
 }
 
-func (f *fakeAgent) EvaluateArticle(context.Context, string, func(string)) (string, error) {
+func (f *fakeAgent) EvaluateArticle(context.Context, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	index := f.evaluationAt
@@ -44,7 +46,7 @@ func (f *fakeAgent) EvaluateArticle(context.Context, string, func(string)) (stri
 	return f.evaluations[index], nil
 }
 
-func (f *fakeAgent) PlanRevision(context.Context, string, string, func(string)) (string, error) {
+func (f *fakeAgent) PlanRevision(context.Context, string, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.planCalls++
 	f.mu.Unlock()
@@ -54,7 +56,7 @@ func (f *fakeAgent) PlanRevision(context.Context, string, string, func(string)) 
 	return `{"instructions":["improve the article"]}`, nil
 }
 
-func (f *fakeAgent) ReviseArticle(context.Context, string, string, string, func(string)) (string, error) {
+func (f *fakeAgent) ReviseArticle(context.Context, string, string, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.reviseCalls++
 	f.mu.Unlock()
@@ -64,28 +66,28 @@ func (f *fakeAgent) ReviseArticle(context.Context, string, string, string, func(
 	return "revised article", nil
 }
 
-func (f *fakeAgent) References(context.Context, string, func(string)) (string, error) {
+func (f *fakeAgent) References(context.Context, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.metadataCalls++
 	f.mu.Unlock()
 	return `{"references":[]}`, nil
 }
 
-func (f *fakeAgent) Infobox(context.Context, string, string, func(string)) (string, error) {
+func (f *fakeAgent) Infobox(context.Context, string, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.metadataCalls++
 	f.mu.Unlock()
 	return `{"rows":[]}`, nil
 }
 
-func (f *fakeAgent) SeeAlso(context.Context, string, func(string)) (string, error) {
+func (f *fakeAgent) SeeAlso(context.Context, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.metadataCalls++
 	f.mu.Unlock()
 	return `{"topics":[]}`, nil
 }
 
-func (f *fakeAgent) CategorizeArticle(context.Context, string, func(string)) (string, error) {
+func (f *fakeAgent) CategorizeArticle(context.Context, string, llm.Sink) (string, error) {
 	f.mu.Lock()
 	f.metadataCalls++
 	f.mu.Unlock()

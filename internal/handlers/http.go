@@ -3,13 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"encyclopedia-ai/internal/ai"
-	"encyclopedia-ai/internal/orchestrator"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
+
+	"encyclopedia-ai/internal/llm"
+	"encyclopedia-ai/internal/orchestrator"
 )
 
 const (
@@ -24,9 +25,6 @@ type Handler struct {
 }
 
 func New(agent orchestrator.Agent) *Handler {
-	if agent == nil {
-		agent = ai.DefaultClient()
-	}
 	return &Handler{Agent: agent}
 }
 
@@ -86,6 +84,31 @@ func (s *safeSender) error() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
+}
+
+// sseSink turns one phase of the pipeline into SSE events.
+//
+// Answer tokens and reasoning tokens travel on separate events, so the client
+// can render a model's deliberation beside the article without either stream
+// contaminating the other. A restart tells the client to discard what it has
+// shown for this phase, because a repair retry is answering again.
+func sseSink(ss *safeSender, stream string) llm.Sink {
+	var (
+		tokenEvent     = stream + "_token"
+		reasoningEvent = stream + "_reasoning"
+		restartEvent   = stream + "_restart"
+	)
+	return func(delta llm.Delta) {
+		if delta.Restart {
+			ss.send(restartEvent, "")
+		}
+		if delta.Reasoning != "" {
+			ss.send(reasoningEvent, delta.Reasoning)
+		}
+		if delta.Content != "" {
+			ss.send(tokenEvent, delta.Content)
+		}
+	}
 }
 
 type errorEvent struct {
@@ -149,9 +172,9 @@ func (h *Handler) StartArticle(w http.ResponseWriter, r *http.Request) {
 		request.MaxRounds,
 		h.Agent,
 		orchestrator.LoopCallbacks{
-			OnArticleToken:      func(token string) { ss.send("article_token", token) },
-			OnEvaluationToken:   func(token string) { ss.send("evaluation_token", token) },
-			OnRevisionPlanToken: func(token string) { ss.send("revision_plan_token", token) },
+			OnArticle:      sseSink(ss, "article"),
+			OnEvaluation:   sseSink(ss, "evaluation"),
+			OnRevisionPlan: sseSink(ss, "revision_plan"),
 			OnRoundComplete: func(round orchestrator.Round) {
 				ss.sendJSON("round_complete", round)
 			},
@@ -159,10 +182,10 @@ func (h *Handler) StartArticle(w http.ResponseWriter, r *http.Request) {
 				ss.send("converged", "")
 			},
 			Metadata: orchestrator.MetadataCallbacks{
-				OnReferencesToken: func(token string) { ss.send("references_token", token) },
-				OnInfoboxToken:    func(token string) { ss.send("infobox_token", token) },
-				OnSeeAlsoToken:    func(token string) { ss.send("seealso_token", token) },
-				OnCategoryToken:   func(token string) { ss.send("category_token", token) },
+				OnReferences: sseSink(ss, "references"),
+				OnInfobox:    sseSink(ss, "infobox"),
+				OnSeeAlso:    sseSink(ss, "seealso"),
+				OnCategories: sseSink(ss, "category"),
 			},
 		},
 	)

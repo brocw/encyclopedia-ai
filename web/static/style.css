@@ -789,3 +789,47 @@ a:visited {
     margin: 0 0 16px;
   }
 }
+
+/* --- Reasoning trace ---------------------------------------------------- */
+/* A reasoning model's deliberation, shown beside the work it produces. It is
+   deliberately quieter than the article: it is process, not content. */
+
+.reasoning-panel {
+  margin: 0.75rem 0;
+  border: 1px solid #c8ccd1;
+  border-radius: 2px;
+  background: #f8f9fa;
+  font-size: 0.85rem;
+}
+
+.reasoning-summary {
+  cursor: pointer;
+  padding: 0.45rem 0.7rem;
+  color: #54595d;
+  font-weight: 600;
+  user-select: none;
+}
+
+.reasoning-summary:hover {
+  color: #202122;
+}
+
+.reasoning-phase {
+  font-weight: 400;
+  font-style: italic;
+  color: #72777d;
+}
+
+.reasoning-log {
+  margin: 0;
+  padding: 0.7rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  border-top: 1px solid #c8ccd1;
+  color: #54595d;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

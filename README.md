@@ -2,7 +2,12 @@
 
 ![A screenshot of an AI-generated article about Bacon](./screenshot.png)
 
-An experimental encyclopedia generator that uses Ollama-backed agents to draft, evaluate, revise, and enhance Wikipedia-style articles.
+An experimental encyclopedia generator that uses AI agents to draft, evaluate, revise, and enhance Wikipedia-style articles.
+
+Model calls go through a provider boundary, so the same pipeline runs against a
+local Ollama instance or any OpenAI-compatible API such as OpenRouter. Reasoning
+models are supported: a model's thinking is streamed on its own channel and
+never mixed into the article text.
 
 ## Run it
 
@@ -11,7 +16,7 @@ Install:
 - Go 1.24 or newer
 - Ollama
 - `curl`
-- The `llama3.1` and `mistral` Ollama models
+- The `llama3.1` and `mistral` Ollama models, or whichever models you configure
 
 The convenience script starts Ollama, waits for it to become available, pulls the models, and starts the server:
 
@@ -30,12 +35,46 @@ The application listens on `http://localhost:8080` by default. Configuration is 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ENCYCLOPEDIA_ADDR` | `:8080` | HTTP listen address |
-| `OLLAMA_API_URL` | `http://localhost:11434/api/generate` | Ollama generation endpoint |
-| `OLLAMA_TEXT_MODEL` | `llama3.1` | Prose generation and revision model |
-| `OLLAMA_STRUCTURED_MODEL` | `mistral` | Evaluation, planning, and metadata model |
-| `OLLAMA_TIMEOUT_SECONDS` | `600` | Maximum duration of one Ollama request |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
+| `LLM_TEXT_MODEL` | `llama3.1` | Prose generation and revision model |
+| `LLM_STRUCTURED_MODEL` | `mistral` | Evaluation, planning, and metadata model |
+| `LLM_THINK` | `off` | Reasoning budget: `off`, `on`, `low`, `medium`, `high` |
+| `LLM_ATTEMPTS` | `3` | Provider calls allowed per agent call, including repairs |
+| `LLM_TIMEOUT_SECONDS` | `600` | Maximum duration of one model request |
+| `LLM_BASE_URL` | provider default | Ollama host, or OpenAI-compatible endpoint |
+| `LLM_API_KEY` | — | Required when `LLM_PROVIDER=openai`; `OPENROUTER_API_KEY` also works |
 | `ROCR_VISIBLE_DEVICES` | `1` | GPU selection used by `start.sh` |
 | `HIP_VISIBLE_DEVICES` | `1` | GPU selection used by `start.sh` |
+
+The previous `OLLAMA_API_URL`, `OLLAMA_TEXT_MODEL`, `OLLAMA_STRUCTURED_MODEL`,
+and `OLLAMA_TIMEOUT_SECONDS` names still work. An `OLLAMA_API_URL` that points
+at `/api/generate` is accepted and trimmed to the host.
+
+Configuration is resolved once at start-up, so a bad value stops the server
+rather than failing on the first request.
+
+### Running against a reasoning model
+
+Locally, pull a model that supports thinking and ask for a trace:
+
+```bash
+LLM_TEXT_MODEL=gpt-oss:20b LLM_STRUCTURED_MODEL=gpt-oss:20b LLM_THINK=high ./start.sh
+```
+
+Against OpenRouter:
+
+```bash
+export LLM_PROVIDER=openai
+export LLM_API_KEY=sk-...
+export LLM_TEXT_MODEL=openai/gpt-oss-120b
+export LLM_STRUCTURED_MODEL=openai/gpt-oss-120b
+export LLM_THINK=high
+go run ./cmd/server
+```
+
+Model identifiers should be checked against the provider's catalogue. A model
+that cannot produce a reasoning trace is detected on its first call and used
+without one, so `llama3.1` and `mistral` keep working with `LLM_THINK` set.
 
 ## Generation flow
 
@@ -53,6 +92,14 @@ The server streams Server-Sent Events in this order:
 4. Metadata token events
 5. `article_done` and a structured `done` event containing the final `ArticleState`
 
+Every stream carries three events. For a stream named `article`:
+
+| Event | Meaning |
+| --- | --- |
+| `article_token` | A token of the answer |
+| `article_reasoning` | A token of the model's reasoning trace |
+| `article_restart` | Discard this stream's tokens; a repair retry is answering again |
+
 `max_rounds` is the maximum number of evaluated rounds, not the number of unverified revisions. A final round is never revised without being evaluated.
 
 The final state includes `status`, `termination_reason`, `converged`, round history, metadata, and any warnings. Loop failures emit an `error` event with the partial state; metadata failures produce a completed article with warnings.
@@ -68,7 +115,13 @@ test -z "$(gofmt -l .)"
 node --check web/static/script.js
 ```
 
-The AI boundary is injectable, so orchestration and HTTP tests do not require a running Ollama instance. The browser supports canceling generation, reviewing round drafts, applying a local edit, and following related topics.
+The provider boundary is injectable, so the `llm`, `ai`, orchestration, and HTTP tests run without Ollama or a network. The browser supports canceling generation, reviewing round drafts, applying a local edit, and following related topics.
+
+## Roadmap
+
+`docs/DEPLOYMENT.md` records the deployment plan and the milestone ladder
+towards a research-backed pipeline: outlining, retrieval, grounded drafting,
+and claim verification.
 
 ## Limitations
 

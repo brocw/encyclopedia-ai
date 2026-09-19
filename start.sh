@@ -27,10 +27,16 @@ until curl -s http://localhost:11434/ > /dev/null 2>&1; do
 done
 echo "Ollama is ready."
 
-# Pull models if not already available
-echo "Ensuring required models are available..."
-ollama pull llama3.1
-ollama pull mistral
+# Pull whichever models are configured, so switching to a reasoning model is
+# a matter of setting LLM_TEXT_MODEL / LLM_STRUCTURED_MODEL.
+TEXT_MODEL="${LLM_TEXT_MODEL:-${OLLAMA_TEXT_MODEL:-llama3.1}}"
+STRUCTURED_MODEL="${LLM_STRUCTURED_MODEL:-${OLLAMA_STRUCTURED_MODEL:-mistral}}"
 
-echo "Starting Encyclopedia-AI server..."
+echo "Ensuring required models are available..."
+ollama pull "$TEXT_MODEL"
+if [ "$STRUCTURED_MODEL" != "$TEXT_MODEL" ]; then
+    ollama pull "$STRUCTURED_MODEL"
+fi
+
+echo "Starting Encyclopedia-AI server (text=$TEXT_MODEL structured=$STRUCTURED_MODEL think=${LLM_THINK:-off})..."
 go run ./cmd/server

@@ -12,7 +12,7 @@ Encyclopedia-AI is an AI-powered encyclopedia generator that produces Wikipedia-
 ./start.sh
 ```
 
-This starts Ollama, pulls required models (`llama3.1` and `mistral`), and runs the Go server on `localhost:8080`. To run the server alone (if Ollama is already running):
+This starts Ollama, pulls the configured models (`llama3.1` and `mistral` by default), and runs the Go server on `localhost:8080`. To run the server alone (if Ollama is already running):
 
 ```bash
 go run ./cmd/server
@@ -22,9 +22,9 @@ Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests 
 
 ## Tech Stack
 
-- **Backend**: Go 1.24.5 using only the standard library (no external dependencies)
+- **Backend**: Go 1.24.5 using only the standard library (no external dependencies so far; a short, explicit dependency budget is allowed from M1 — see `docs/DEPLOYMENT.md`)
 - **Frontend**: Vanilla HTML/CSS/JS with `marked.js` via CDN for Markdown rendering
-- **LLM**: Ollama API at `localhost:11434` — `llama3.1` for text generation, `mistral` for structured JSON outputs
+- **LLM**: any `llm.Provider`. Local Ollama (`/api/chat`) by default; OpenRouter or another OpenAI-compatible endpoint with `LLM_PROVIDER=openai`. Reasoning models are supported through `LLM_THINK`.
 
 ## Architecture
 
@@ -33,34 +33,46 @@ Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests 
 The system follows a Generate → [Evaluate → Compare → Plan → Revise]* → Metadata pipeline:
 
 1. `POST /api/start` with `{topic, max_rounds}` triggers `RunArticleLoop`
-2. **Actuator**: Generate initial article via `llama3.1`
-3. **Sensor**: `EvaluateArticleStreaming` (mistral, JSON) scores the article on 5 dimensions and lists critical issues
+2. **Actuator**: `GenerateArticle` (text model) writes the initial article
+3. **Sensor**: `EvaluateArticle` (structured model, JSON) scores the article on 5 dimensions and lists critical issues
 4. **Comparator**: `hasConverged` checks if overall score >= 8.0 with no critical issues; `isStagnant` detects score plateaus between rounds
-5. **Controller**: `PlanRevisionStreaming` (mistral, JSON) produces targeted revision instructions from the evaluation
-6. **Actuator**: `ReviseArticleStreaming` (llama3.1) applies the revision plan
+5. **Controller**: `PlanRevision` (structured model, JSON) produces targeted revision instructions from the evaluation
+6. **Actuator**: `ReviseArticle` (text model) applies the revision plan
 7. Loop repeats until convergence, stagnation, or max rounds
 8. **Metadata agents** (references, infobox, see-also, categories) run once in parallel on the final article
 
-All responses stream tokens via SSE. The frontend shows a round timeline with per-round quality scores and a convergence badge.
+All responses stream tokens via SSE. The frontend shows a round timeline with per-round quality scores, a convergence badge, and the live reasoning trace when a reasoning model is configured.
+
+The loop still grades itself: `factual_accuracy` is scored by a model with no access to evidence. Hardening that gate is M4.
 
 ### Backend Structure (`internal/`)
 
-- **`ai/`**: Configurable, context-aware Ollama client with one shared newline-delimited JSON streaming implementation. `OLLAMA_API_URL`, model names, and request timeout are environment-configurable.
-- **`orchestrator/`**: Coordinates the cybernetic loop through the injectable `Agent` interface. `ArticleState` records status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
+- **`llm/`**: The provider boundary. `Provider.Stream` delivers `Delta{Content, Reasoning, Restart}`, keeping a reasoning trace out of article text and out of the JSON parsers. Implementations: `Ollama` (`/api/chat`, with a remembered fallback for models that reject `think`) and `OpenAI` (any OpenAI-compatible `/chat/completions`, reading both `reasoning` and `reasoning_content`). `StreamWithRepair` re-asks the model when an answer is empty or unparseable, and salvages fenced JSON locally. `ConfigFromEnv` is validated at start-up.
+- **`ai/`**: The agents. Each owns an embedded prompt and a model role (prose or structured) and calls through `llm`. Repair here is syntactic only; semantic validation of each agent's document stays in the orchestrator.
+- **`orchestrator/`**: Coordinates the cybernetic loop through the injectable `Agent` interface, whose methods stream to an `llm.Sink`. `ArticleState` records status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
 - **`handlers/`**: `Handler` owns the injected agent and exposes `POST /api/start`. `safeSender` serializes concurrent SSE writes and cancels the request when the client disconnects. The final `done` event contains structured state rather than a double-encoded JSON string.
 
 ### Frontend (`web/static/`)
 
-Single-page app with Wikipedia-inspired styling. `script.js` manages article state client-side, handles SSE streaming, sanitizes rendered Markdown, displays a round timeline with color-coded quality scores, shows explicit termination and warning states, supports canceling generation, and provides local article/draft review editing.
+Single-page app with Wikipedia-inspired styling. `script.js` manages article state client-side, handles SSE streaming, sanitizes rendered Markdown, displays a round timeline with color-coded quality scores, streams the reasoning trace into a collapsible "Editor's notes" panel as text (never markup), shows explicit termination and warning states, supports canceling generation, and provides local article/draft review editing.
 
 ### Key Patterns
 
-- **Two-model strategy**: `llama3.1` for prose generation/revision; `mistral` with Ollama's `format: "json"` for structured data (evaluation, revision plans, metadata)
-- **Token-level streaming**: Each AI call takes a callback invoked per token, enabling real-time SSE pushes via `http.Flusher`
-- **Cancellation propagation**: Browser aborts and disconnected SSE clients cancel the request context passed through the handler, orchestrator, and Ollama client.
+- **Two-model strategy**: a text model for prose generation/revision; a structured model in JSON mode for evaluation, revision plans, and metadata. Both are configurable and may be the same model.
+- **Provider independence**: nothing above `internal/llm` knows which backend is in use. Keep provider-specific behaviour inside that package.
+- **Separated reasoning**: answer tokens and reasoning tokens travel on different channels end to end — `llm.Delta`, then `<stream>_token` and `<stream>_reasoning` SSE events, then the collapsible "Editor's notes" panel. A reasoning trace must never reach article text or a JSON parser.
+- **Token-level streaming**: Each AI call takes an `llm.Sink` invoked per increment, enabling real-time SSE pushes via `http.Flusher`. Call `Sink.Emit`, never the func value, so a nil sink stays safe.
+- **Cancellation propagation**: Browser aborts and disconnected SSE clients cancel the request context passed through the handler, orchestrator, and provider.
 - **Autonomous convergence**: The loop self-terminates based on quality scores — no manual intervention required
 - **Parallel metadata agents**: 4 metadata agents run as goroutines with WaitGroup synchronization after the loop completes
 - **Stateless server**: No database or persistence — `ArticleState` (including full round history) is returned to the client. Browser edits are local only.
+
+### Planned work
+
+`docs/DEPLOYMENT.md` holds the deployment plan and the milestone ladder. M0
+(the provider boundary) is done. M1–M5 replace one-shot generation with an
+outline → research → grounded drafting → verification pipeline, at which point
+the references agent is deleted rather than improved.
 
 ### Current limitations
 

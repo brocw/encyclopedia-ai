@@ -1,82 +1,16 @@
+// Package ai holds the article agents. Each agent owns a prompt and a model
+// role; every model call goes through the llm.Provider boundary, so the same
+// agents run against local Ollama and against a hosted OpenAI-compatible API.
 package ai
 
 import (
-	"bufio"
-	"bytes"
+	"cmp"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
-	"time"
+
+	"encyclopedia-ai/internal/llm"
 )
-
-const (
-	defaultAPIURL          = "http://localhost:11434/api/generate"
-	defaultTextModel       = "llama3.1"
-	defaultStructuredModel = "mistral"
-	defaultTimeout         = 10 * time.Minute
-	maxStreamLineSize      = 4 * 1024 * 1024
-)
-
-// Client is the Ollama-backed implementation of the article-generation agents.
-// Its fields are exported so applications and tests can configure the client
-// without relying on package globals.
-type Client struct {
-	APIURL          string
-	TextModel       string
-	StructuredModel string
-	HTTPClient      *http.Client
-}
-
-// NewClient creates an Ollama client. Empty values use the application defaults.
-func NewClient(apiURL, textModel, structuredModel string, httpClient *http.Client) *Client {
-	if apiURL == "" {
-		apiURL = defaultAPIURL
-	}
-	if textModel == "" {
-		textModel = defaultTextModel
-	}
-	if structuredModel == "" {
-		structuredModel = defaultStructuredModel
-	}
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
-	}
-	return &Client{
-		APIURL:          apiURL,
-		TextModel:       textModel,
-		StructuredModel: structuredModel,
-		HTTPClient:      httpClient,
-	}
-}
-
-// NewClientFromEnv reads optional Ollama configuration from the environment.
-// OLLAMA_TIMEOUT_SECONDS controls the total duration of one request.
-func NewClientFromEnv() *Client {
-	timeout := defaultTimeout
-	if seconds, err := strconv.Atoi(os.Getenv("OLLAMA_TIMEOUT_SECONDS")); err == nil && seconds > 0 {
-		timeout = time.Duration(seconds) * time.Second
-	}
-	return NewClient(
-		os.Getenv("OLLAMA_API_URL"),
-		os.Getenv("OLLAMA_TEXT_MODEL"),
-		os.Getenv("OLLAMA_STRUCTURED_MODEL"),
-		&http.Client{Timeout: timeout},
-	)
-}
-
-// DefaultClient returns the process-wide production client.
-func DefaultClient() *Client {
-	return defaultClient
-}
-
-var defaultClient = NewClientFromEnv()
 
 //go:embed generate_prompt.txt
 var generatePrompt string
@@ -102,131 +36,113 @@ var evaluatePrompt string
 //go:embed revision_plan_prompt.txt
 var revisionPlanPrompt string
 
-type ollamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-	Format string `json:"format,omitempty"`
+// The system turns establish the role once, so the per-agent prompt files stay
+// focused on the task and its output format.
+const (
+	proseSystemPrompt = "You are an encyclopedia editor. You write neutral, " +
+		"factual, well-structured reference prose. Follow the requested output " +
+		"format exactly and emit nothing besides the article itself."
+
+	structuredSystemPrompt = "You are an encyclopedia editor's assistant producing " +
+		"structured data. Reply with a single JSON object matching the requested " +
+		"schema, and nothing else: no prose, no explanation, no code fences."
+)
+
+// Client runs the agents against a configured provider.
+type Client struct {
+	Provider llm.Provider
+	Config   llm.Config
 }
 
-type ollamaResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
-	Error    string `json:"error,omitempty"`
+// New builds a client over an existing provider.
+func New(provider llm.Provider, config llm.Config) *Client {
+	return &Client{Provider: provider, Config: config}
 }
 
-// callStreaming is the one streaming implementation used by all agents.
-// Ollama emits newline-delimited JSON, one object per line.
-func (c *Client) callStreaming(ctx context.Context, model, prompt, format string, onToken func(string)) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if c == nil || c.HTTPClient == nil {
-		return "", fmt.Errorf("ollama client is not configured")
-	}
-
-	reqData := ollamaRequest{Model: model, Prompt: prompt, Stream: true, Format: format}
-	jsonData, err := json.Marshal(reqData)
+// NewFromEnv reads the provider configuration and builds the client. It
+// returns an error rather than falling back to a default, so a misconfigured
+// deployment fails at start-up instead of on the first request.
+func NewFromEnv() (*Client, error) {
+	config, err := llm.ConfigFromEnv()
 	if err != nil {
-		return "", fmt.Errorf("marshal Ollama request: %w", err)
+		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIURL, bytes.NewReader(jsonData))
+	provider, err := config.NewProvider()
 	if err != nil {
-		return "", fmt.Errorf("create Ollama request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	return New(provider, config), nil
+}
 
-	log.Printf("[ollama-stream] Starting request to model '%s'...", model)
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("send Ollama request: %w", err)
+// Describe reports the active configuration for start-up logging.
+func (c *Client) Describe() string {
+	if c == nil || c.Provider == nil {
+		return "no provider configured"
 	}
-	defer resp.Body.Close()
+	return fmt.Sprintf("provider=%s text=%s structured=%s think=%s",
+		c.Provider.Name(), c.Config.TextModel, c.Config.StructuredModel,
+		cmp.Or(string(c.Config.Think), "off"))
+}
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-		if readErr != nil {
-			return "", fmt.Errorf("Ollama returned HTTP %s (read error: %w)", resp.Status, readErr)
-		}
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = resp.Status
-		}
-		return "", fmt.Errorf("Ollama returned HTTP %s: %s", resp.Status, message)
+// prose runs a text-model call and returns the answer without its reasoning trace.
+func (c *Client) prose(ctx context.Context, prompt string, sink llm.Sink) (string, error) {
+	return c.call(ctx, llm.Request{
+		Model:    c.Config.TextModel,
+		Messages: []llm.Message{llm.System(proseSystemPrompt), llm.User(prompt)},
+		Think:    c.Config.Think,
+	}, sink)
+}
+
+// structured runs a JSON-mode call on the structured model.
+//
+// Repair here is deliberately syntactic: it recovers empty answers, code
+// fences, and truncated JSON. Semantic validation of each agent's shape stays
+// in the orchestrator, which owns the meaning of those documents.
+func (c *Client) structured(ctx context.Context, prompt string, sink llm.Sink) (string, error) {
+	return c.call(ctx, llm.Request{
+		Model:    c.Config.StructuredModel,
+		Messages: []llm.Message{llm.System(structuredSystemPrompt), llm.User(prompt)},
+		Think:    c.Config.Think,
+		Format:   llm.FormatJSON,
+	}, sink)
+}
+
+func (c *Client) call(ctx context.Context, req llm.Request, sink llm.Sink) (string, error) {
+	if c == nil || c.Provider == nil {
+		return "", fmt.Errorf("ai: provider is not configured")
 	}
-
-	var full strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), maxStreamLineSize)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-
-		var chunk ollamaResponse
-		if err := json.Unmarshal(line, &chunk); err != nil {
-			return full.String(), fmt.Errorf("decode Ollama stream: %w", err)
-		}
-		if chunk.Error != "" {
-			return full.String(), fmt.Errorf("Ollama error: %s", chunk.Error)
-		}
-		if chunk.Response != "" {
-			full.WriteString(chunk.Response)
-			if onToken != nil {
-				onToken(chunk.Response)
-			}
-		}
-		if chunk.Done {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return full.String(), fmt.Errorf("read Ollama stream: %w", err)
-	}
-
-	response := full.String()
-	log.Printf("[ollama-stream] Model '%s' finished. Response length: %d chars.", model, len(response))
-	return response, nil
+	response, err := llm.StreamWithRepair(ctx, c.Provider, req, nil, c.Config.Attempts, sink)
+	return response.Content, err
 }
 
-func (c *Client) GenerateArticle(ctx context.Context, topic string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(generatePrompt, topic)
-	return c.callStreaming(ctx, c.TextModel, prompt, "", onToken)
+func (c *Client) GenerateArticle(ctx context.Context, topic string, sink llm.Sink) (string, error) {
+	return c.prose(ctx, fmt.Sprintf(generatePrompt, topic), sink)
 }
 
-func (c *Client) ReviseArticle(ctx context.Context, topic, article, revisionPlan string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(revisePrompt, topic, article, revisionPlan)
-	return c.callStreaming(ctx, c.TextModel, prompt, "", onToken)
+func (c *Client) ReviseArticle(ctx context.Context, topic, article, revisionPlan string, sink llm.Sink) (string, error) {
+	return c.prose(ctx, fmt.Sprintf(revisePrompt, topic, article, revisionPlan), sink)
 }
 
-func (c *Client) CategorizeArticle(ctx context.Context, article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(categorizePrompt, article)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) CategorizeArticle(ctx context.Context, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(categorizePrompt, article), sink)
 }
 
-func (c *Client) References(ctx context.Context, article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(referencesPrompt, article)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) References(ctx context.Context, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(referencesPrompt, article), sink)
 }
 
-func (c *Client) Infobox(ctx context.Context, topic, article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(infoboxPrompt, topic, article)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) Infobox(ctx context.Context, topic, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(infoboxPrompt, topic, article), sink)
 }
 
-func (c *Client) SeeAlso(ctx context.Context, article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(seealsoPrompt, article)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) SeeAlso(ctx context.Context, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(seealsoPrompt, article), sink)
 }
 
-func (c *Client) EvaluateArticle(ctx context.Context, article string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(evaluatePrompt, article)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) EvaluateArticle(ctx context.Context, article string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(evaluatePrompt, article), sink)
 }
 
-func (c *Client) PlanRevision(ctx context.Context, article, evaluation string, onToken func(string)) (string, error) {
-	prompt := fmt.Sprintf(revisionPlanPrompt, article, evaluation)
-	return c.callStreaming(ctx, c.StructuredModel, prompt, "json", onToken)
+func (c *Client) PlanRevision(ctx context.Context, article, evaluation string, sink llm.Sink) (string, error) {
+	return c.structured(ctx, fmt.Sprintf(revisionPlanPrompt, article, evaluation), sink)
 }

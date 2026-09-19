@@ -27,10 +27,16 @@ const cancelEditButton = document.getElementById('cancelEditButton');
 // State
 let articleState = null;
 let activeRequestController = null;
+let currentJobId = null;
 
 // --- Event Listeners ---
 startButton.addEventListener('click', handleStart);
-cancelButton.addEventListener('click', () => {
+cancelButton.addEventListener('click', async () => {
+    // Cancel the job on the server; aborting the stream alone would leave the
+    // worker running.
+    if (currentJobId) {
+        await fetch(`/api/articles/${currentJobId}/cancel`, { method: 'POST' }).catch(() => {});
+    }
     if (activeRequestController) activeRequestController.abort();
 });
 editArticleButton.addEventListener('click', () => {
@@ -192,31 +198,15 @@ function showGenerationNotice(message, type) {
 // --- Functions ---
 
 /**
- * Reads an SSE stream from a fetch response and dispatches token events.
- * Returns the final ArticleState from the "done" event.
+ * Reads a framed SSE stream, dispatching each event and tracking the last
+ * sequence number so a dropped connection can resume from it.
  */
-async function streamSSE(response, callbacks) {
+async function readEventStream(response, onEvent, onSeq) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let currentEvent = '';
-    let result = null;
-
-    const eventMap = {
-        article_token: callbacks.onArticleToken,
-        evaluation_token: callbacks.onEvaluationToken,
-        revision_plan_token: callbacks.onRevisionPlanToken,
-        references_token: callbacks.onReferencesToken,
-        infobox_token: callbacks.onInfoboxToken,
-        seealso_token: callbacks.onSeeAlsoToken,
-        category_token: callbacks.onCategoryToken,
-    };
-
-    // Every stream carries three events: <stream>_token for the answer,
-    // <stream>_reasoning for the model's deliberation, and <stream>_restart
-    // when a repair retry means the tokens so far must be discarded.
-    const streamSuffix = (event, suffix) =>
-        event.endsWith(suffix) ? event.slice(0, -suffix.length) : null;
+    let id = '';
+    let type = '';
 
     while (true) {
         const { done, value } = await reader.read();
@@ -227,46 +217,78 @@ async function streamSSE(response, callbacks) {
         buffer = lines.pop();
 
         for (const line of lines) {
-            if (line.startsWith('event: ')) {
-                currentEvent = line.slice(7);
+            if (line.startsWith('id: ')) {
+                id = line.slice(4);
+            } else if (line.startsWith('event: ')) {
+                type = line.slice(7);
             } else if (line.startsWith('data: ')) {
-                const raw = line.slice(6);
-                const handler = eventMap[currentEvent];
-                const reasoningStream = streamSuffix(currentEvent, '_reasoning');
-                const restartStream = streamSuffix(currentEvent, '_restart');
-                if (handler) {
-                    handler(JSON.parse(raw));
-                } else if (reasoningStream) {
-                    if (callbacks.onReasoning) callbacks.onReasoning(reasoningStream, JSON.parse(raw));
-                } else if (restartStream) {
-                    if (callbacks.onRestart) callbacks.onRestart(restartStream);
-                } else if (currentEvent === 'round_complete') {
-                    if (callbacks.onRoundComplete) {
-                        callbacks.onRoundComplete(JSON.parse(raw));
-                    }
-                } else if (currentEvent === 'converged') {
-                    if (callbacks.onConverged) callbacks.onConverged();
-                } else if (currentEvent === 'article_done') {
-                    setPhaseStatus('phase-metadata', 'active');
-                } else if (currentEvent === 'done') {
-                    result = JSON.parse(raw);
-                    if (callbacks.onDone) callbacks.onDone(result);
-                } else if (currentEvent === 'error') {
-                    const payload = JSON.parse(raw);
-                    const error = new Error(payload.message || 'Article generation failed.');
-                    error.state = payload.state;
-                    throw error;
-                }
-                currentEvent = '';
+                const data = JSON.parse(line.slice(6));
+                if (id && onSeq) onSeq(Number(id));
+                onEvent(type, data);
+                id = '';
+                type = '';
             }
+            // Lines beginning with ':' are keep-alive comments; ignore them.
         }
     }
-
-    return result;
 }
 
 /**
- * Handles the "Generate" button click — triggers the full cybernetic loop.
+ * Follows a job to completion, reconnecting from the last seen event if the
+ * connection drops. A generation runs for tens of minutes, so a dropped
+ * connection is expected rather than exceptional.
+ */
+async function followJob(jobId, handlers) {
+    let cursor = 0;
+    let attempt = 0;
+
+    while (true) {
+        let response;
+        try {
+            response = await fetch(`/api/articles/${jobId}/events?from=${cursor}`, {
+                signal: activeRequestController.signal,
+            });
+        } catch (error) {
+            if (error.name === 'AbortError') throw error;
+            response = null;
+        }
+
+        if (response && response.ok) {
+            attempt = 0;
+            let closed = false;
+            try {
+                await readEventStream(
+                    response,
+                    (type, data) => {
+                        if (type === 'closed') {
+                            closed = true;
+                            return;
+                        }
+                        handlers.onEvent(type, data);
+                    },
+                    (seq) => { cursor = seq; },
+                );
+            } catch (error) {
+                if (error.name === 'AbortError') throw error;
+            }
+            if (closed) return;
+        } else if (response && response.status === 404) {
+            throw new Error('That article is no longer available.');
+        }
+
+        // The stream ended without the job finishing: reconnect, backing off
+        // a little so a server restart is not hammered.
+        attempt += 1;
+        if (attempt > 10) {
+            throw new Error('Lost connection to the server.');
+        }
+        if (handlers.onReconnecting) handlers.onReconnecting(attempt);
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000 * attempt, 5000)));
+    }
+}
+
+/**
+ * Handles the "Generate" button click — enqueues a job and follows it.
  */
 async function handleStart() {
     const topic = topicInput.value.trim();
@@ -287,94 +309,183 @@ async function handleStart() {
     topicEl.textContent = topic;
     clearContent();
 
-    let articleText = '';
-    let articleIsRevision = false;
-
     try {
-        const response = await fetch('/api/start', {
+        const response = await fetch('/api/articles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ topic, max_rounds: maxRounds }),
             signal: activeRequestController.signal,
         });
-
         if (!response.ok) {
-            throw new Error(`Server error: ${response.statusText}`);
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || `Server error: ${response.statusText}`);
         }
 
-        articleState = await streamSSE(response, {
-            onArticleToken(token) {
-                // The article_token event fires for both initial generation and revisions.
-                // On the first revision, we need to clear the previous article text.
-                if (articleIsRevision) {
-                    articleText = '';
-                    articleIsRevision = false;
-                    setPhaseStatus('phase-revise', 'active');
-                }
-                articleText += token;
-                articleEl.innerHTML = renderMarkdown(articleText);
-                debouncedTOCUpdate();
-            },
-            onEvaluationToken(token) {
-                setPhaseStatus('phase-generate', 'done');
-                setPhaseStatus('phase-evaluate', 'active');
-            },
-            onRevisionPlanToken(token) {
-                setPhaseStatus('phase-evaluate', 'done');
-                setPhaseStatus('phase-plan', 'active');
-            },
-            onRoundComplete(round) {
-                roundCounter.textContent = `Round ${round.number} complete (score: ${round.evaluation.overall.toFixed(1)})`;
-                addRoundToTimeline(round);
+        const job = await response.json();
+        currentJobId = job.id;
+        // The job outlives this page view, so make it linkable.
+        history.replaceState(null, '', `?article=${job.id}`);
 
-                // Prepare for next revision
-                setPhaseStatus('phase-plan', 'done');
-                setPhaseStatus('phase-revise', 'pending');
-                articleIsRevision = true;
-            },
-            onConverged() {
-                convergenceBadge.textContent = 'Converged';
-                convergenceBadge.className = 'convergence-badge converged';
-            },
-            onReferencesToken(token) {
-                document.getElementById('references-section').classList.remove('hidden');
-            },
-            onInfoboxToken(token) {
-                infoboxEl.classList.remove('hidden');
-            },
-            onSeeAlsoToken(token) {
-                document.getElementById('seealso-section').classList.remove('hidden');
-            },
-            onCategoryToken() {},
-            onReasoning(stream, token) {
-                appendReasoning(stream, token);
-            },
-            onRestart(stream) {
-                // A repair retry is answering again from the start, so
-                // whatever this stream has already painted is stale.
-                if (stream === 'article') {
-                    articleText = '';
-                    articleEl.innerHTML = '';
-                }
-                showGenerationNotice('The model returned an unusable response; retrying.', 'warning');
-            },
-            onDone(state) {
-                finishPhaseStatuses(state);
-            },
-        });
-
-        render();
-
+        await watchJob(job.id, topic);
     } catch (error) {
-        if (error.state) {
-            articleState = error.state;
-            render();
-        }
-        if (error.name === 'AbortError') {
+        reportGenerationError(error);
+    } finally {
+        activeRequestController = null;
+        setLoading(false);
+    }
+}
+
+/**
+ * Attaches to a job and renders it, whether it is running or already done.
+ */
+async function watchJob(jobId, topic) {
+    if (topic) topicEl.textContent = topic;
+
+    let articleText = '';
+    let articleIsRevision = false;
+
+    const streamHandlers = {
+        article(text) {
+            // Tokens arrive for both the initial draft and each revision. The
+            // first token after a completed round starts a new draft.
+            if (articleIsRevision) {
+                articleText = '';
+                articleIsRevision = false;
+                setPhaseStatus('phase-revise', 'active');
+            }
+            articleText += text;
+            articleEl.innerHTML = renderMarkdown(articleText);
+            debouncedTOCUpdate();
+        },
+        evaluation() {
+            setPhaseStatus('phase-generate', 'done');
+            setPhaseStatus('phase-evaluate', 'active');
+        },
+        revision_plan() {
+            setPhaseStatus('phase-evaluate', 'done');
+            setPhaseStatus('phase-plan', 'active');
+        },
+        references() {
+            setPhaseStatus('phase-metadata', 'active');
+            document.getElementById('references-section').classList.remove('hidden');
+        },
+        infobox() {
+            setPhaseStatus('phase-metadata', 'active');
+            infoboxEl.classList.remove('hidden');
+        },
+        seealso() {
+            setPhaseStatus('phase-metadata', 'active');
+            document.getElementById('seealso-section').classList.remove('hidden');
+        },
+        category() {
+            setPhaseStatus('phase-metadata', 'active');
+        },
+    };
+
+    let failure = null;
+
+    await followJob(jobId, {
+        onReconnecting(attempt) {
+            showGenerationNotice(`Connection lost; reconnecting (attempt ${attempt})…`, 'warning');
+        },
+        onEvent(type, data) {
+            switch (type) {
+                case 'token': {
+                    const handler = streamHandlers[data.stream];
+                    if (handler) handler(data.text);
+                    break;
+                }
+                case 'reasoning':
+                    appendReasoning(data.stream, data.text);
+                    break;
+                case 'restart':
+                    // A repair retry answers again from the beginning, so
+                    // whatever this stream has painted is stale.
+                    if (data.stream === 'article') {
+                        articleText = '';
+                        articleEl.innerHTML = '';
+                    }
+                    showGenerationNotice('The model returned an unusable response; retrying.', 'warning');
+                    break;
+                case 'round':
+                    roundCounter.textContent =
+                        `Round ${data.number} complete (score: ${data.evaluation.overall.toFixed(1)})`;
+                    addRoundToTimeline(data);
+                    setPhaseStatus('phase-plan', 'done');
+                    setPhaseStatus('phase-revise', 'pending');
+                    articleIsRevision = true;
+                    break;
+                case 'converged':
+                    convergenceBadge.textContent = 'Converged';
+                    convergenceBadge.className = 'convergence-badge converged';
+                    break;
+                case 'done':
+                    articleState = data;
+                    finishPhaseStatuses(data);
+                    break;
+                case 'error':
+                    failure = new Error(data.message || 'Article generation failed.');
+                    failure.state = data.state;
+                    break;
+            }
+        },
+    });
+
+    // The job record is authoritative: the stream may have been resumed after
+    // the interesting events had already been written.
+    const job = await fetch(`/api/articles/${jobId}`).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (job) {
+        topicEl.textContent = job.topic;
+        if (job.state) articleState = job.state;
+        if (job.status === 'canceled') {
             showGenerationNotice('Generation canceled.', 'warning');
-        } else {
-            showGenerationNotice(`Generation failed: ${error.message}`, 'error');
+        } else if (job.status === 'failed' && !failure) {
+            failure = new Error(job.error || 'Article generation failed.');
         }
+    }
+
+    if (failure) {
+        reportGenerationError(failure);
+        return;
+    }
+    if (articleState) render();
+}
+
+function reportGenerationError(error) {
+    if (error.name === 'AbortError') {
+        showGenerationNotice('Generation canceled.', 'warning');
+        return;
+    }
+    if (error.state) {
+        articleState = error.state;
+        render();
+    }
+    showGenerationNotice(`Generation failed: ${error.message}`, 'error');
+}
+
+/**
+ * Opens a job named in the URL, so a generation can be shared or revisited.
+ */
+async function openLinkedJob() {
+    const jobId = new URLSearchParams(location.search).get('article');
+    if (!jobId) return;
+
+    const response = await fetch(`/api/articles/${jobId}`).catch(() => null);
+    if (!response || !response.ok) return;
+
+    const job = await response.json();
+    activeRequestController = new AbortController();
+    currentJobId = job.id;
+    topicInput.value = job.topic;
+    mainContent.classList.remove('hidden');
+    clearContent();
+    resetPhases();
+    setLoading(!job.finished_at);
+
+    try {
+        await watchJob(job.id, job.topic);
+    } catch (error) {
+        reportGenerationError(error);
     } finally {
         activeRequestController = null;
         setLoading(false);
@@ -643,3 +754,5 @@ function debouncedTOCUpdate() {
         addEditSectionLinks();
     }, 500);
 }
+
+openLinkedJob();

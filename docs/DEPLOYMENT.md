@@ -8,7 +8,7 @@ This document assumes the milestone ladder in the refactor plan:
 | # | Milestone | State |
 | --- | --- | --- |
 | M0 | Provider boundary, `/api/chat`, thinking split from content, repair | in progress |
-| M1 | Jobs, persistence, resumable SSE | planned |
+| M1 | Jobs, persistence, resumable SSE | jobs and resumable SSE done; durable store outstanding |
 | M2 | Intake, outline, section drafting | planned |
 | M3 | Retrieval, evidence store, real references | planned |
 | M4 | Verification agents, hard convergence gates | planned |
@@ -59,7 +59,12 @@ fail-fast on anything missing. No key ever baked into an image.
 | `DATABASE_URL` | Postgres |
 | `ENCYCLOPEDIA_ADDR` | Listen address |
 
-## 3. Persistence (M1 prerequisite)
+## 3. Persistence (the outstanding half of M1)
+
+`jobs.Store` is already the seam: `MemoryStore` implements it, and a durable
+backend implements the same six methods. `Claim` must stay atomic — that is
+what stops two workers taking the same job.
+
 
 Postgres: `articles`, `jobs`, `events`, `sources`, `claims`, `rounds`.
 

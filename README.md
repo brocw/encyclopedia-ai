@@ -35,6 +35,7 @@ The application listens on `http://localhost:8080` by default. Configuration is 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ENCYCLOPEDIA_ADDR` | `:8080` | HTTP listen address |
+| `JOB_WORKERS` | `1` | Jobs generated at once. Local inference is GPU bound |
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
 | `LLM_TEXT_MODEL` | `llama3.1` | Prose generation and revision model |
 | `LLM_STRUCTURED_MODEL` | `mistral` | Evaluation, planning, and metadata model |
@@ -91,31 +92,58 @@ without one, so `llama3.1` and `mistral` keep working with `LLM_THINK` set.
 
 ## Generation flow
 
-`POST /api/start` accepts:
+Generation does not happen inside a request. A reasoning run takes tens of
+minutes, which no load balancer or mobile connection will hold open, so a
+request enqueues a job and clients follow its event log.
 
-```json
-{"topic":"Bacon","max_rounds":3}
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/articles` | Enqueue a job. Returns `202` with the job and a `Location` header |
+| `GET /api/articles/{id}` | The job, including its `ArticleState` once finished |
+| `GET /api/articles/{id}/events` | The job's event log as SSE |
+| `POST /api/articles/{id}/cancel` | Stop a queued or running job |
+
+```bash
+curl -X POST localhost:8080/api/articles \
+  -H 'Content-Type: application/json' \
+  -d '{"topic":"Bacon","max_rounds":3}'
 ```
 
-The server streams Server-Sent Events in this order:
+### Following a job
 
-1. Article, evaluation, and revision-plan token events
-2. `round_complete` events containing the evaluated draft and scores
-3. Optional `converged` event
-4. Metadata token events
-5. `article_done` and a structured `done` event containing the final `ArticleState`
+Every event carries a contiguous `id`, so a client that drops out resumes
+exactly where it stopped by sending the standard `Last-Event-ID` reconnect
+header, or `?from=<seq>`:
 
-Every stream carries three events. For a stream named `article`:
+```bash
+curl -N localhost:8080/api/articles/<id>/events
+curl -N -H 'Last-Event-ID: 51' localhost:8080/api/articles/<id>/events
+```
 
-| Event | Meaning |
+| Event | Payload |
 | --- | --- |
-| `article_token` | A token of the answer |
-| `article_reasoning` | A token of the model's reasoning trace |
-| `article_restart` | Discard this stream's tokens; a repair retry is answering again |
+| `token` | `{stream, text}` — a chunk of that stream's answer |
+| `reasoning` | `{stream, text}` — a chunk of its reasoning trace |
+| `restart` | `{stream}` — discard this stream; a repair retry is answering again |
+| `round` | The completed round, with its scores |
+| `converged` | The loop reached the quality threshold |
+| `done` | The final `ArticleState` |
+| `error` | `{message, state}` — the failure and any partial state |
+| `closed` | The job is finished; the stream ends |
 
-`max_rounds` is the maximum number of evaluated rounds, not the number of unverified revisions. A final round is never revised without being evaluated.
+Streams are `article`, `evaluation`, `revision_plan`, `references`, `infobox`,
+`seealso`, and `category`.
 
-The final state includes `status`, `termination_reason`, `converged`, round history, metadata, and any warnings. Loop failures emit an `error` event with the partial state; metadata failures produce a completed article with warnings.
+Token deltas are coalesced before they are logged. One reasoning run produced
+over eleven thousand deltas; batching turns that into a few dozen events
+without changing what the client reconstructs.
+
+Replaying a job's log from the beginning rebuilds the article exactly. A
+client that arrives after the job finished can skip the log entirely and read
+`GET /api/articles/{id}`.
+
+`max_rounds` is the maximum number of evaluated rounds, not the number of
+unverified revisions. A final round is never revised without being evaluated.
 
 ## Development
 
@@ -140,4 +168,6 @@ and claim verification.
 
 Generated prose and metadata are not independently verified. In particular, the current references agent produces candidate references rather than retrieved or validated citations. Source retrieval and evidence application are intentionally separate future work.
 
-This is a stateless prototype: generated articles and local edits are not persisted.
+Jobs live in process memory, so a restart loses them. The store is an
+interface with a durable implementation planned; see `docs/DEPLOYMENT.md`.
+Browser edits remain local only.

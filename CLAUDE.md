@@ -32,7 +32,7 @@ Tests, `go vet`, formatting checks, and GitHub Actions CI are configured. Tests 
 
 The system follows a Generate → [Evaluate → Compare → Plan → Revise]* → Metadata pipeline:
 
-1. `POST /api/start` with `{topic, max_rounds}` triggers `RunArticleLoop`
+1. `POST /api/articles` enqueues a job; a worker runs `RunArticleLoop`
 2. **Actuator**: `GenerateArticle` (text model) writes the initial article
 3. **Sensor**: `EvaluateArticle` (structured model, JSON) scores the article on 5 dimensions and lists critical issues
 4. **Comparator**: `hasConverged` checks if overall score >= 8.0 with no critical issues; `isStagnant` detects score plateaus between rounds
@@ -50,7 +50,8 @@ The loop still grades itself: `factual_accuracy` is scored by a model with no ac
 - **`llm/`**: The provider boundary. `Provider.Stream` delivers `Delta{Content, Reasoning, Restart}`, keeping a reasoning trace out of article text and out of the JSON parsers. Implementations: `Ollama` (`/api/chat`, with a remembered fallback for models that reject `think`) and `OpenAI` (any OpenAI-compatible `/chat/completions`, reading both `reasoning` and `reasoning_content`). `StreamWithRepair` re-asks the model when an answer is empty or unparseable, and salvages fenced JSON locally. `ConfigFromEnv` is validated at start-up.
 - **`ai/`**: The agents. Each owns an embedded prompt and a model role (prose or structured) and calls through `llm`. Repair here is syntactic only; semantic validation of each agent's document stays in the orchestrator.
 - **`orchestrator/`**: Coordinates the cybernetic loop through the injectable `Agent` interface, whose methods stream to an `llm.Sink`. `ArticleState` records status, termination reason, warnings, and `Rounds` history. A final evaluated round is never revised without another evaluation; failed loop phases return partial state and an error.
-- **`handlers/`**: `Handler` owns the injected agent and exposes `POST /api/start`. `safeSender` serializes concurrent SSE writes and cancels the request when the client disconnects. The final `done` event contains structured state rather than a double-encoded JSON string.
+- **`jobs/`**: generation as a background job. `Runner` drains a queue of `Job`s with a worker pool; `Recorder` coalesces token deltas into batched events before they reach the log; `Broker` wakes live subscribers; `Store` persists jobs and their append-only event logs, with `MemoryStore` as the default implementation. Event sequence numbers are contiguous from 1, which is what makes a stream resumable.
+- **`handlers/`**: the job API — enqueue, read, stream, cancel. The SSE handler replays a job's log from the client's last sequence number and then follows it live, so a dropped connection resumes without a gap.
 
 ### Frontend (`web/static/`)
 
@@ -66,7 +67,10 @@ Single-page app with Wikipedia-inspired styling. `script.js` manages article sta
 - **Cancellation propagation**: Browser aborts and disconnected SSE clients cancel the request context passed through the handler, orchestrator, and provider.
 - **Autonomous convergence**: The loop self-terminates based on quality scores — no manual intervention required
 - **Parallel metadata agents**: 4 metadata agents run as goroutines with WaitGroup synchronization after the loop completes
-- **Stateless server**: No database or persistence — `ArticleState` (including full round history) is returned to the client. Browser edits are local only.
+- **Work off the request path**: a request enqueues; a worker generates. Nothing long-running happens inside an HTTP handler, because a reasoning run outlives any reasonable request timeout.
+- **The log is the contract**: clients reconstruct all state by replaying a job's events. Live and resuming subscribers follow the identical path, so there is no separate catch-up code to keep correct.
+- **Token coalescing**: deltas are batched by size or interval before being logged. A run that emitted 11,087 deltas becomes a few dozen events.
+- **In-memory persistence**: `MemoryStore` loses everything on restart. A durable `Store` is the next step; see `docs/DEPLOYMENT.md`.
 
 ### Planned work
 
